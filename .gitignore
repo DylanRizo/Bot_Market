@@ -1,0 +1,45 @@
+# --- Secretos y credenciales: nunca deben entrar al repositorio ---
+credenciales_google.json
+token_google.json
+.firupost_openai_key.bin
+marketplace_dashboard_token.txt
+*.key
+*.pem
+
+# --- Estado de ejecucion ---
+*.db
+*.db-wal
+*.db-shm
+*.pid
+*.log
+marketplace_activity.json
+marketplace_failures/
+marketplace_runtime_locks/
+marketplace_worker_jobs/
+marketplace_publish_intents/
+
+# --- Artefactos generados ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+ArticulosGenerados.xlsx
+Articulos_FiruPost.xlsx
+_firupost_raw_sync.xlsx
+firupost_validation_report.xlsx
+firupost_session_config.json
+firupost_grouped_listings/
+firupost_test_batch/
+marketplace_campaign_generated*/
+marketplace_campaign_uploads/
+marketplace_test_uploads/
+.codex_*/
+.dashboard_preview_activity.json
+
+# --- Capturas de diagnostico ---
+*.png
+*.jpg
+imagenes_firupost/
+
+# Configuracion local con datos propios
+marketplace_accounts.json
+marketplace_campaign_example.json

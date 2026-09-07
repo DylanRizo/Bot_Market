@@ -1,0 +1,14 @@
+{
+  "accounts": {
+    "cuenta1": {
+      "display_name": "Cuenta principal",
+      "debugger_address": "127.0.0.1:9222",
+      "chrome_profile": "%LOCALAPPDATA%\\MarketplaceBot_cuenta1"
+    },
+    "cuenta2": {
+      "display_name": "Cuenta secundaria",
+      "debugger_address": "127.0.0.1:9223",
+      "chrome_profile": "%LOCALAPPDATA%\\MarketplaceBot_cuenta2"
+    }
+  }
+}
