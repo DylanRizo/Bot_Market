@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import sqlite3
 import uuid
 from contextlib import contextmanager
+from functools import lru_cache
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
@@ -14,6 +16,23 @@ SCRATCH_DIR = Path(__file__).resolve().parent
 DEFAULT_DB = SCRATCH_DIR / "marketplace_bot.db"
 DEFAULT_ACTIVITY = SCRATCH_DIR / "marketplace_activity.json"
 FINAL_STATUSES = {"published", "tested", "prepared", "skipped", "cancelled"}
+RETRY_MAX_DELAY_MINUTES = 6 * 60
+UNCERTAIN_PUBLISH_DETAIL = (
+    "El trabajador se interrumpio despues de pulsar Publish. Revisa Marketplace: "
+    "el anuncio puede haberse creado. No se reintenta solo para no duplicarlo."
+)
+
+
+@lru_cache(maxsize=8192)
+def resolved_path(raw: str) -> Path:
+    """Path.resolve() cacheado.
+
+    Resolver una ruta en Windows cuesta varias llamadas al sistema, y el
+    planificador resuelve las mismas fotos cientos de veces al armar la semana.
+    Resolver es una operacion sobre el texto de la ruta, asi que cachearla es
+    seguro: la existencia del archivo se sigue comprobando aparte.
+    """
+    return Path(raw).resolve()
 
 
 def now_iso() -> str:
@@ -46,6 +65,7 @@ class MarketplaceStore:
     def __init__(self, path: Path | str = DEFAULT_DB) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._hash_cache: dict[tuple[str, int, int], str] = {}
         self.initialize()
 
     def connect(self) -> sqlite3.Connection:
@@ -412,20 +432,43 @@ class MarketplaceStore:
             )
         self.record_media_usage(queue_id)
 
-    @staticmethod
-    def _image_hash(path: Path) -> str:
+    def image_hash(self, path: Path) -> str:
+        """SHA-256 del contenido de una foto, con cache por instancia.
+
+        El planificador pregunta por el mismo archivo miles de veces al armar una
+        semana (espacios x familias x cuentas). La clave incluye fecha y tamano,
+        asi que reemplazar la foto invalida la entrada sola.
+        """
+        path = Path(path)
+        key: tuple[str, int, int] | None
+        try:
+            stats = path.stat()
+            key = (str(path), stats.st_mtime_ns, stats.st_size)
+        except OSError:
+            key = None
+        if key is not None:
+            cached = self._hash_cache.get(key)
+            if cached:
+                return cached
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
-        return digest.hexdigest()
+        value = digest.hexdigest()
+        if key is not None:
+            self._hash_cache[key] = value
+        return value
+
+    def _image_hash(self, path: Path) -> str:
+        """Alias historico. Usar image_hash."""
+        return self.image_hash(path)
 
     @staticmethod
     def job_image_paths(job: dict[str, Any]) -> list[Path]:
         raw = (job.get("listing_overrides") or {}).get("image_paths") or job.get("image_paths") or []
         paths: list[Path] = []
         for value in raw:
-            path = Path(str(value)).resolve()
+            path = resolved_path(str(value))
             if path.is_file() and path not in paths:
                 paths.append(path)
         return paths
@@ -433,9 +476,9 @@ class MarketplaceStore:
     def media_conflicts(self, account: str, image_paths: list[Path] | list[str]) -> list[dict[str, str]]:
         candidates: list[tuple[str, str]] = []
         for raw in image_paths:
-            path = Path(str(raw)).resolve()
+            path = resolved_path(str(raw))
             if path.is_file():
-                candidates.append((self._image_hash(path), str(path)))
+                candidates.append((self.image_hash(path), str(path)))
         if not candidates:
             return []
         placeholders = ",".join("?" for _ in candidates)
@@ -519,6 +562,23 @@ class MarketplaceStore:
             )
         return cursor.rowcount > 0
 
+    @staticmethod
+    def retry_delay_minutes(base_minutes: int, attempts: int, jitter: bool = True) -> int:
+        """Espera creciente entre reintentos.
+
+        Un fallo temporal de Facebook rara vez se resuelve en el mismo minuto, y
+        golpear la cuenta cada media hora con el mismo error es justo lo que
+        dispara una revision. Cada intento duplica la espera hasta un tope de seis
+        horas, con una variacion de +-20% para no caer siempre en el mismo minuto.
+        """
+        base = max(1, int(base_minutes))
+        exponent = max(0, int(attempts) - 1)
+        delay = base * (2 ** min(exponent, 10))
+        delay = min(delay, RETRY_MAX_DELAY_MINUTES)
+        if jitter:
+            delay = int(delay * random.uniform(0.8, 1.2))
+        return max(1, min(delay, RETRY_MAX_DELAY_MINUTES))
+
     def schedule_retry(self, queue_id: str, delay_minutes: int, detail: str) -> None:
         item = self.get_queue_item(queue_id)
         if not item:
@@ -526,19 +586,54 @@ class MarketplaceStore:
         if item["attempts"] >= item["max_attempts"]:
             self.update_queue_item(queue_id, status="blocked", detail=detail, finished_at=now_iso())
             return
-        retry_at = (datetime.now() + timedelta(minutes=max(1, delay_minutes))).isoformat(timespec="seconds")
+        wait = self.retry_delay_minutes(delay_minutes, item["attempts"])
+        retry_at = (datetime.now() + timedelta(minutes=wait)).isoformat(timespec="seconds")
         self.update_queue_item(queue_id, status="retry", next_attempt_at=retry_at, detail=detail)
 
-    def recover_stale(self, age_minutes: int = 30) -> int:
+    def recover_stale(
+        self,
+        age_minutes: int = 30,
+        uncertain_ids: set[str] | None = None,
+    ) -> dict[str, list[str]]:
+        """Rescata trabajos que quedaron 'running' tras una interrupcion.
+
+        Un trabajo que alcanzo a pulsar Publish puede haber creado el anuncio de
+        verdad, asi que reintentarlo duplicaria la publicacion. El trabajador pasa
+        en `uncertain_ids` los que dejaron archivo de intencion; esos se bloquean
+        para que una persona revise Marketplace antes de volver a intentarlo.
+        """
         cutoff = (datetime.now() - timedelta(minutes=max(1, age_minutes))).isoformat(timespec="seconds")
-        with self.connect() as connection:
-            cursor = connection.execute(
-                """UPDATE queue SET status='retry', next_attempt_at=?,
-                   detail='Recuperado despues de una interrupcion del trabajador.', updated_at=?
-                   WHERE status='running' AND started_at < ?""",
-                (now_iso(), now_iso(), cutoff),
-            )
-        return max(0, cursor.rowcount)
+        uncertain = {str(value) for value in (uncertain_ids or set())}
+        timestamp = now_iso()
+        recovered: dict[str, list[str]] = {"retry": [], "blocked": []}
+        with self.transaction(immediate=True) as connection:
+            stale = [
+                str(row["id"])
+                for row in connection.execute(
+                    "SELECT id FROM queue WHERE status='running' AND started_at < ?", (cutoff,)
+                ).fetchall()
+            ]
+            for queue_id in stale:
+                if queue_id in uncertain:
+                    connection.execute(
+                        """UPDATE queue SET status='blocked', detail=?, finished_at=?, updated_at=?
+                           WHERE id=? AND status='running'""",
+                        (UNCERTAIN_PUBLISH_DETAIL, timestamp, timestamp, queue_id),
+                    )
+                    recovered["blocked"].append(queue_id)
+                else:
+                    connection.execute(
+                        """UPDATE queue SET status='retry', next_attempt_at=?, detail=?, updated_at=?
+                           WHERE id=? AND status='running'""",
+                        (
+                            timestamp,
+                            "Recuperado despues de una interrupcion del trabajador.",
+                            timestamp,
+                            queue_id,
+                        ),
+                    )
+                    recovered["retry"].append(queue_id)
+        return recovered
 
     def recent_family_publications(self, account: str = "") -> dict[str, str]:
         params: list[Any] = []

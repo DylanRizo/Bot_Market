@@ -22,9 +22,15 @@ CAMPAIGN_PATH = SCRATCH_DIR / "marketplace_campaign_example.json"
 ACCOUNTS_PATH = SCRATCH_DIR / "marketplace_accounts.json"
 ACTIVITY_PATH = SCRATCH_DIR / "marketplace_activity.json"
 WORKER_JOBS_DIR = SCRATCH_DIR / "marketplace_worker_jobs"
+PUBLISH_INTENTS_DIR = SCRATCH_DIR / "marketplace_publish_intents"
 OPEN_SESSION_SCRIPT = SCRATCH_DIR / "abrir_sesion_marketplace_cuenta.ps1"
 
 BLOCKING_ERRORS = {"SESSION_BLOCKED", "PUBLISH_OUTCOME_UNKNOWN", "DATA_INVALID", "IMAGE_REUSED"}
+PUBLISHING_MODES = {"semiautomatic", "autonomous"}
+UNCERTAIN_PUBLISH_DETAIL = (
+    "Se pulso Publish pero no hubo confirmacion. Revisa Marketplace antes de reintentar: "
+    "el anuncio puede existir ya."
+)
 
 
 def log(message: str) -> None:
@@ -111,9 +117,16 @@ def preflight(item: dict[str, Any], config: dict[str, Any]) -> tuple[bool, str, 
     return True, "", browser_detail
 
 
-def classify_failure(output: str, returncode: int) -> tuple[str, str]:
+def classify_failure(
+    output: str,
+    returncode: int,
+    publishing: bool = False,
+    timed_out: bool = False,
+) -> tuple[str, str]:
     code_match = re.search(r"\[error-code:([A-Z_]+)\]", output)
-    if code_match:
+    if timed_out:
+        code = "TIMEOUT"
+    elif code_match:
         code = code_match.group(1)
     elif "ya esta siendo usada por otra publicacion" in output:
         code = "ACCOUNT_BUSY"
@@ -123,9 +136,37 @@ def classify_failure(output: str, returncode: int) -> tuple[str, str]:
         code = "DATA_INVALID"
     else:
         code = "PUBLISHER_FAILED"
+    # Un timeout en modo publicacion puede haber cortado el proceso despues de
+    # crear el anuncio. Reintentar a ciegas duplicaria la publicacion.
+    if publishing and code == "TIMEOUT":
+        code = "PUBLISH_OUTCOME_UNKNOWN"
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     detail = lines[-1] if lines else f"El publicador termino con codigo {returncode}."
+    if timed_out:
+        detail = f"El publicador no respondio en 10 minutos y se corto. {detail}"
     return code, detail[:1000]
+
+
+def listing_url_from_output(output: str) -> str:
+    matches = re.findall(r"\[listing-url:(.+?)\]", output)
+    return matches[-1].strip() if matches else ""
+
+
+def intent_path_for(queue_id: str) -> Path:
+    return PUBLISH_INTENTS_DIR / f"{queue_id}.json"
+
+
+def clear_intent(queue_id: str) -> None:
+    try:
+        intent_path_for(queue_id).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def pending_intent_ids() -> set[str]:
+    if not PUBLISH_INTENTS_DIR.is_dir():
+        return set()
+    return {path.stem for path in PUBLISH_INTENTS_DIR.glob("*.json")}
 
 
 def campaign_for_item(item: dict[str, Any], config: dict[str, Any]) -> Path:
@@ -137,6 +178,7 @@ def campaign_for_item(item: dict[str, Any], config: dict[str, Any]) -> Path:
         value = job.get(key)
         if value and not Path(str(value)).is_absolute():
             job[key] = str((SCRATCH_DIR / str(value)).resolve())
+    job["intent_file"] = str(intent_path_for(item["id"]))
     payload = {
         "default_account": item["account"],
         "default_interval_minutes": 0,
@@ -153,6 +195,17 @@ def campaign_for_item(item: dict[str, Any], config: dict[str, Any]) -> Path:
 
 def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, Any]) -> None:
     queue_id = item["id"]
+    mode = config["mode"]
+    publishing = mode in PUBLISHING_MODES
+
+    # La aprobacion se comprueba antes que nada: no tiene sentido levantar Chrome
+    # para un elemento que despues vamos a devolver a la cola.
+    if mode == "semiautomatic" and not item["approved"]:
+        detail = "Pendiente de aprobacion humana."
+        store.update_queue_item(queue_id, status="planned", detail=detail)
+        log(f"Pendiente de aprobacion: {item['name']}")
+        return
+
     attempt_id = store.begin_attempt(queue_id, item["attempts"])
     if store.publication_exists(item["account"], item["fingerprint"]):
         detail = "Omitido porque esta huella ya figura como publicada en la cuenta."
@@ -163,7 +216,7 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
 
     images = store.job_image_paths(item.get("job") or {})
     conflicts = store.media_conflicts(item["account"], images)
-    if config["mode"] not in {"simulation", "dry_run", "supervised"} and conflicts:
+    if publishing and conflicts:
         detail = (
             f"La cuenta {item['account']} ya publico {len(conflicts)} de estas fotos. "
             "Agrega fotos nuevas para volver a publicar este producto en la misma cuenta."
@@ -194,18 +247,17 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
         "--max-jobs",
         "1",
     ]
-    mode = config["mode"]
     if mode == "simulation":
         command.append("--plan-only")
-    elif mode in {"semiautomatic", "autonomous"}:
-        if mode == "semiautomatic" and not item["approved"]:
-            detail = "Pendiente de aprobacion humana."
-            store.finish_attempt(attempt_id, "planned", "APPROVAL_REQUIRED", detail)
-            store.update_queue_item(queue_id, status="planned", detail=detail)
-            return
+    elif publishing:
         command.append("--confirm-publish")
 
+    # Cualquier intencion vieja se descarta ahora: a partir de aqui, si el archivo
+    # aparece, lo escribio este intento.
+    clear_intent(queue_id)
+
     log(f"Ejecutando {item['name']} | cuenta={item['account']} | modo={mode}")
+    timed_out = False
     try:
         completed = subprocess.run(
             command,
@@ -216,14 +268,23 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
         )
         output = (completed.stdout or "") + (completed.stderr or "")
     except subprocess.TimeoutExpired as exc:
+        # El aviso de timeout viene de la excepcion, no de lo que imprimio el hijo:
+        # hay que arrastrarlo como bandera o la salida parece un fallo cualquiera.
+        timed_out = True
         output = (exc.stdout or "") + (exc.stderr or "")
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
         completed = subprocess.CompletedProcess(command, 124, output, "")
 
     if completed.returncode == 0:
-        if mode in {"semiautomatic", "autonomous"}:
-            store.mark_published(queue_id)
+        if publishing:
+            listing_url = listing_url_from_output(output)
+            store.mark_published(queue_id, listing_url)
+            clear_intent(queue_id)
             final_status = "published"
             detail = "Publicacion confirmada por el ejecutor."
+            if listing_url:
+                detail += f" URL: {listing_url}"
         elif mode == "simulation":
             final_status = "tested"
             detail = "Simulacion completada sin abrir Facebook."
@@ -236,7 +297,14 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
         log(f"Completado {item['name']}: {final_status}")
         return
 
-    error_code, detail = classify_failure(output, completed.returncode)
+    error_code, detail = classify_failure(
+        output, completed.returncode, publishing=publishing, timed_out=timed_out
+    )
+    # Si quedo archivo de intencion, el clic en Publish ya salio. No importa como
+    # haya fallado despues: reintentarlo crearia un segundo anuncio.
+    if intent_path_for(queue_id).exists():
+        error_code = "PUBLISH_OUTCOME_UNKNOWN"
+        detail = f"{UNCERTAIN_PUBLISH_DETAIL} Detalle del publicador: {detail}"[:1000]
     store.finish_attempt(attempt_id, "failed", error_code, detail, output)
     if error_code in BLOCKING_ERRORS:
         store.update_queue_item(queue_id, status="blocked", detail=detail, finished_at=now_iso())
@@ -259,7 +327,17 @@ def ensure_future_calendar(store: MarketplaceStore, config: dict[str, Any]) -> N
 
 def run_once(store: MarketplaceStore) -> bool:
     config = load_config(store)
-    store.recover_stale()
+    recovered = store.recover_stale(uncertain_ids=pending_intent_ids())
+    for queue_id in recovered.get("blocked", []):
+        item = store.get_queue_item(queue_id)
+        store.create_alert(
+            "critical",
+            "PUBLISH_OUTCOME_UNKNOWN",
+            UNCERTAIN_PUBLISH_DETAIL,
+            item["account"] if item else "",
+            queue_id,
+        )
+        log(f"Resultado incierto tras la interrupcion: {item['name'] if item else queue_id}")
     store.heartbeat("scheduler", {"status": "idle", "pid": __import__("os").getpid(), "enabled": config["enabled"]})
     if not config["enabled"]:
         return False

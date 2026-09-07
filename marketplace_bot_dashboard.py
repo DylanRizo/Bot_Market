@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -58,6 +59,11 @@ OPEN_SESSION_SCRIPT = SCRATCH_DIR / "abrir_sesion_marketplace_cuenta.ps1"
 WORKER_PATH = SCRATCH_DIR / "marketplace_scheduler_worker.py"
 WORKER_PID_PATH = SCRATCH_DIR / "marketplace_scheduler_worker.pid"
 WORKER_LOG_PATH = SCRATCH_DIR / "marketplace_scheduler_worker.log"
+PUBLISH_INTENTS_DIR = SCRATCH_DIR / "marketplace_publish_intents"
+DASHBOARD_TOKEN_PATH = SCRATCH_DIR / "marketplace_dashboard_token.txt"
+SESSION_COOKIE = "mb_session"
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+SESSION_TOKEN = ""
 STORE = MarketplaceStore(SCRATCH_DIR / "marketplace_bot.db")
 STORE.migrate_activity(ACTIVITY_PATH)
 
@@ -1370,6 +1376,7 @@ HTML = r"""<!doctype html>
               <div><label>Máximo diario</label><input id="autoMaxDaily" type="number" min="1" max="20"></div>
               <div><label>Intervalo (minutos)</label><input id="autoInterval" type="number" min="30" step="15"></div>
               <div><label>Días antes de repetir</label><input id="autoCooldown" type="number" min="0" max="30"></div>
+              <div><label title="Mueve cada publicación unos minutos al azar para que el horario no sea siempre idéntico.">Variación del horario (min)</label><input id="autoJitter" type="number" min="0" max="30"></div>
             </div>
             <label>Cuentas activas</label>
             <div id="autoAccounts" class="weekday-row"></div>
@@ -1636,10 +1643,16 @@ HTML = r"""<!doctype html>
       $("saveState").textContent = dirty ? "Cambios sin guardar" : "Guardado";
     }
 
+    const DASHBOARD_TOKEN = "__MB_TOKEN__";
+
     async function api(path, options = {}) {
       const response = await fetch(path, {
-        headers: { "Content-Type": "application/json" },
         ...options,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Marketplace-Token": DASHBOARD_TOKEN,
+          ...(options.headers || {}),
+        },
       });
       const payload = await response.json();
       if (!response.ok || payload.ok === false) throw new Error(payload.error || "Error");
@@ -1783,6 +1796,7 @@ HTML = r"""<!doctype html>
       $("autoMaxDaily").value = config.max_per_day ?? 3;
       $("autoInterval").value = config.interval_minutes ?? 180;
       $("autoCooldown").value = config.cooldown_days ?? 3;
+      $("autoJitter").value = config.slot_jitter_minutes ?? 7;
 
       const dayNames = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
       const activeDays = new Set(config.active_days || []);
@@ -1953,6 +1967,7 @@ HTML = r"""<!doctype html>
         max_per_day: Number($("autoMaxDaily").value || 3),
         interval_minutes: Number($("autoInterval").value || 180),
         cooldown_days: Number($("autoCooldown").value || 0),
+        slot_jitter_minutes: Number($("autoJitter").value || 0),
         active_days: [...$("autoDays").querySelectorAll("input:checked")].map(input => Number(input.value)),
         selected_families: [...$("autoFamilies").querySelectorAll("input:checked")].map(input => input.value),
         account_photo_assignments: autoPhotoDraft,
@@ -1986,6 +2001,17 @@ HTML = r"""<!doctype html>
     }
 
     async function autonomyItemAction(id, action) {
+      if (action === "retry") {
+        const item = (state.autonomy?.queue || []).find(entry => entry.id === id);
+        if (item && /Publish/i.test(item.detail || "") && /incierto|puede haberse creado|puede existir/i.test(item.detail || "")) {
+          const go = confirm(
+            "Este anuncio pudo haberse publicado antes de la interrupcion.\n\n" +
+            "Revisa Marketplace primero: si el anuncio ya existe, reintentar creara un duplicado.\n\n" +
+            "¿Reintentar de todas formas?"
+          );
+          if (!go) return;
+        }
+      }
       const payload = { id, action };
       if (action === "move") payload.scheduled_at = document.querySelector(`[data-move-value="${CSS.escape(id)}"]`)?.value;
       const result = await api("/api/autonomy/item", { method: "POST", body: JSON.stringify(payload) });
@@ -2795,11 +2821,82 @@ HTML = r"""<!doctype html>
 """
 
 
+def clear_publish_intent(queue_id: str) -> None:
+    """Borra la marca de 'se pulso Publish' de un trabajo.
+
+    Solo debe hacerlo una persona que ya reviso Marketplace, porque a partir de
+    ahi el trabajador vuelve a tratar el trabajo como reintentable.
+    """
+    if not queue_id:
+        return
+    try:
+        (PUBLISH_INTENTS_DIR / f"{queue_id}.json").unlink()
+    except FileNotFoundError:
+        pass
+
+
+def issue_session_token() -> str:
+    """Crea el token de esta sesion del panel y lo deja en un archivo local.
+
+    El panel maneja el bot completo (arrancar el trabajador, publicar ahora,
+    cambiar cuentas), asi que no puede quedar abierto a cualquiera que alcance el
+    puerto. El token vive solo mientras corre el proceso.
+    """
+    global SESSION_TOKEN
+    SESSION_TOKEN = secrets.token_urlsafe(32)
+    DASHBOARD_TOKEN_PATH.write_text(SESSION_TOKEN, encoding="utf-8")
+    return SESSION_TOKEN
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "MarketplaceBotDashboard/1.0"
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+    def cookie_token(self) -> str:
+        raw = self.headers.get("Cookie") or ""
+        for part in raw.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == SESSION_COOKIE:
+                return value.strip()
+        return ""
+
+    def query_token(self) -> str:
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        return query.get("token", [""])[0]
+
+    def same_origin(self) -> bool:
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        return urllib.parse.urlparse(origin).netloc == (self.headers.get("Host") or "")
+
+    def authorized(self, require_header: bool = False) -> bool:
+        if not SESSION_TOKEN:
+            return True
+        presented = self.cookie_token() or self.query_token()
+        if not secrets.compare_digest(presented, SESSION_TOKEN):
+            return False
+        if not require_header:
+            return True
+        # Una pagina de otro sitio puede provocar un POST, pero no puede poner una
+        # cabecera propia ni falsear el Origin. Eso cierra el CSRF.
+        if not secrets.compare_digest(self.headers.get("X-Marketplace-Token", ""), SESSION_TOKEN):
+            return False
+        return self.same_origin()
+
+    def deny(self) -> None:
+        self.send_json(
+            {
+                "ok": False,
+                "error": (
+                    "No autorizado. Abre el panel con el enlace que imprime "
+                    "iniciar_panel_marketplace.ps1, que incluye el token de la sesion."
+                ),
+            },
+            status=401,
+        )
 
     def send_json(self, payload: Any, status: int = 200) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -2821,10 +2918,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         try:
+            if not self.authorized():
+                self.deny()
+                return
             if self.path == "/" or self.path.startswith("/?"):
-                data = HTML.encode("utf-8")
+                data = HTML.replace("__MB_TOKEN__", SESSION_TOKEN).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header(
+                    "Set-Cookie",
+                    f"{SESSION_COOKIE}={SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/",
+                )
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -2914,6 +3018,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            if not self.authorized(require_header=True):
+                self.deny()
+                return
             if self.path == "/api/assistant/upload-image":
                 payload = self.read_json()
                 filename = Path(str(payload.get("filename") or "foto.jpg")).name
@@ -3000,8 +3107,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 queue_id = str(payload.get("id") or "")
                 action = str(payload.get("action") or "")
                 if action == "cancel":
+                    clear_publish_intent(queue_id)
                     STORE.update_queue_item(queue_id, status="cancelled", detail="Cancelado desde el calendario.")
                 elif action == "retry":
+                    # La persona ya reviso Marketplace: se descarta la intencion vieja
+                    # para que el trabajador no vuelva a marcar el resultado como incierto.
+                    clear_publish_intent(queue_id)
                     STORE.update_queue_item(queue_id, status="queued", next_attempt_at=None, finished_at=None, detail="Reintento manual.")
                 elif action == "move":
                     scheduled_at = str(payload.get("scheduled_at") or "")
@@ -3153,11 +3264,25 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--no-open", action="store_true")
+    parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Permite escuchar fuera de esta computadora. El panel controla el bot: usalo solo si sabes por que.",
+    )
     args = parser.parse_args()
 
+    if args.host not in LOOPBACK_HOSTS and not args.allow_remote:
+        raise SystemExit(
+            f"El panel solo escucha en esta computadora ({', '.join(sorted(LOOPBACK_HOSTS))}).\n"
+            f"Pediste --host {args.host}, que lo expone a la red y deja el bot al alcance de otros.\n"
+            "Si de verdad lo necesitas, agrega --allow-remote."
+        )
+
+    token = issue_session_token()
     server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
-    url = f"http://{args.host}:{args.port}/"
+    url = f"http://{args.host}:{args.port}/?token={token}"
     print(f"Marketplace Bot Dashboard: {url}", flush=True)
+    print(f"Token de la sesion guardado en: {DASHBOARD_TOKEN_PATH}", flush=True)
     if not args.no_open:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:

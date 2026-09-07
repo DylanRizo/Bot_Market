@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ DEFAULT_AUTONOMY_CONFIG: dict[str, Any] = {
     "cooldown_days": 3,
     "max_attempts": 2,
     "retry_delay_minutes": 30,
+    "slot_jitter_minutes": 7,
     "selected_families": list(ASSISTANT_PRESETS),
     "family_modes": {},
     "ai_descriptions": False,
@@ -70,6 +72,7 @@ def normalize_config(raw: dict[str, Any] | None = None) -> dict[str, Any]:
     config["cooldown_days"] = max(0, int(config.get("cooldown_days") or 0))
     config["max_attempts"] = max(1, min(int(config.get("max_attempts") or 2), 5))
     config["retry_delay_minutes"] = max(5, int(config.get("retry_delay_minutes") or 30))
+    config["slot_jitter_minutes"] = max(0, min(int(config.get("slot_jitter_minutes") or 0), 30))
     config["selected_families"] = [
         key for key in config.get("selected_families", []) if key in ASSISTANT_PRESETS
     ] or list(ASSISTANT_PRESETS)
@@ -115,6 +118,27 @@ def save_config(store: MarketplaceStore, raw: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+def jitter_span_minutes(config: dict[str, Any]) -> int:
+    """Cuantos minutos puede moverse un espacio, sin llegar a solaparse con el siguiente."""
+    requested = max(0, int(config.get("slot_jitter_minutes") or 0))
+    room = max(0, int(config["interval_minutes"]) // 2 - 1)
+    return min(requested, room)
+
+
+def slot_offset(config: dict[str, Any], moment: datetime, index: int) -> timedelta:
+    """Desplazamiento pseudoaleatorio pero estable para un espacio del calendario.
+
+    Publicar siempre a las 09:00, 12:00 y 15:00 clavadas es un patron mecanico.
+    La semilla depende del dia y de la posicion, asi que volver a generar la misma
+    semana da el mismo horario y el calendario no se baraja entre regeneraciones.
+    """
+    span = jitter_span_minutes(config)
+    if span <= 0:
+        return timedelta()
+    seed = f"{moment.date().isoformat()}|{index}|{config.get('start_time')}|{config.get('interval_minutes')}"
+    return timedelta(minutes=random.Random(seed).randint(-span, span))
+
+
 def build_slots(config: dict[str, Any], start_date: date | None = None, now: datetime | None = None) -> list[datetime]:
     current = now or datetime.now()
     first_date = start_date or current.date()
@@ -126,12 +150,15 @@ def build_slots(config: dict[str, Any], start_date: date | None = None, now: dat
         target_date = first_date + timedelta(days=day_offset)
         if target_date.weekday() not in config["active_days"]:
             continue
-        candidate = datetime.combine(target_date, start_clock)
+        start_at = datetime.combine(target_date, start_clock)
         end_at = datetime.combine(target_date, end_clock)
+        candidate = start_at
         count = 0
         while candidate <= end_at and count < config["max_per_day"]:
-            if candidate > current + timedelta(minutes=2):
-                slots.append(candidate)
+            shifted = candidate + slot_offset(config, candidate, count)
+            shifted = min(max(shifted, start_at), end_at)
+            if shifted > current + timedelta(minutes=2):
+                slots.append(shifted)
                 count += 1
             candidate += interval
     return slots
@@ -198,7 +225,7 @@ def generate_week(
         if key not in last_used or moment > last_used[key]:
             last_used[key] = moment
         for image in store.job_image_paths(item.get("job") or {}):
-            reserved_media.add((item["account"], store._image_hash(image)))
+            reserved_media.add((item["account"], store.image_hash(image)))
 
     jobs = sorted(
         family_jobs,
@@ -223,7 +250,6 @@ def generate_week(
         for offset in range(len(jobs)):
             candidate = jobs[(cursor + offset) % len(jobs)]
             family = str(candidate.get("family_key") or "")
-            images = store.job_image_paths(candidate)
             eligible_accounts: list[str] = []
             for account in target_accounts:
                 account_candidate = job_for_account(candidate, account, config)
@@ -231,7 +257,7 @@ def generate_week(
                 used_at = last_used.get((account, family))
                 cooldown_ok = used_at is None or slot - used_at >= timedelta(days=config["cooldown_days"])
                 published_conflict = bool(store.media_conflicts(account, images))
-                reserved_conflict = any((account, store._image_hash(image)) in reserved_media for image in images)
+                reserved_conflict = any((account, store.image_hash(image)) in reserved_media for image in images)
                 if cooldown_ok and not published_conflict and not reserved_conflict:
                     eligible_accounts.append(account)
             if eligible_accounts:
@@ -267,7 +293,7 @@ def generate_week(
                 created.append(queue_id)
                 last_used[(account, family)] = account_slot
                 for image in store.job_image_paths(account_job):
-                    reserved_media.add((account, store._image_hash(image)))
+                    reserved_media.add((account, store.image_hash(image)))
     return {
         "created": len(created),
         "ids": created,

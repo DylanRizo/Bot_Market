@@ -268,6 +268,9 @@ def build_command(
     if confirm_publish:
         command.append("--confirm-publish")
         command.append("--strict-details")
+        intent_file = job.get("intent_file")
+        if intent_file:
+            command.extend(["--intent-file", str(intent_file)])
 
     return command
 

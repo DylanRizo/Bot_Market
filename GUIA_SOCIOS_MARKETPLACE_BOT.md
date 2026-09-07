@@ -20,7 +20,10 @@ OneDrive, Dropbox, una unidad de red o una carpeta compartida. Cada instalacion
 debe conservar esos datos exclusivamente en el disco local de su propietario.
 
 El panel escucha solo en `127.0.0.1`, por lo que no queda expuesto directamente
-a Internet ni a otros equipos de la red.
+a Internet ni a otros equipos de la red. Ademas pide una llave: al arrancar
+genera un token, lo guarda en `marketplace_dashboard_token.txt` y lo agrega al
+enlace que abre el iniciador. Si abres `http://127.0.0.1:8794/` sin esa llave, el
+panel responde `No autorizado`. No compartas ese archivo ni el enlace completo.
 
 ## 2. Que se puede compartir
 
@@ -83,7 +86,9 @@ python -m pip install -r ".\requirements_marketplace_bot.txt"
 powershell -ExecutionPolicy Bypass -File ".\iniciar_panel_marketplace.ps1"
 ```
 
-5. El navegador abrira `http://127.0.0.1:8794/`.
+5. El navegador abrira el panel en `http://127.0.0.1:8794/` con la llave de la
+   sesion incluida en el enlace. Si cierras la pestana, vuelve a ejecutar el
+   iniciador en lugar de escribir la direccion a mano.
 
 Si el paquete no incluyo catalogo, copia `ArticulosGenerados.xlsx` y la carpeta
 `imagenes_firupost` junto a los archivos del bot antes de generar un calendario.
@@ -178,6 +183,16 @@ Antes de dejarlo trabajando:
 
 `El panel no abre`: confirma que Python este instalado y vuelve a ejecutar
 `iniciar_panel_marketplace.ps1`.
+
+`No autorizado`: abriste el panel sin la llave de la sesion. Cierra la pestana y
+vuelve a ejecutar `iniciar_panel_marketplace.ps1`, que genera el enlace correcto.
+
+`PUBLISH_OUTCOME_UNKNOWN`: el bot pulso `Publish` pero no pudo confirmar el
+resultado, casi siempre porque Facebook se colgo o el equipo se reinicio. **Abre
+Marketplace y revisa si el anuncio existe.** Si no existe, pulsa `Reintentar` en
+el calendario. Si ya existe, cancela el elemento. El bot no reintenta solo a
+proposito: seria la forma mas facil de terminar con el mismo anuncio publicado
+dos veces.
 
 `Sesion cerrada`: selecciona la cuenta, abre su sesion y vuelve a iniciar sesion
 en la ventana de Chrome correspondiente.

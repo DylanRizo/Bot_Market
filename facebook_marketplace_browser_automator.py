@@ -81,6 +81,30 @@ def capture_failure(driver, stage: str, exc: Exception) -> Path | None:
         return None
 
 
+def write_publish_intent(intent_path: Path | None, driver, product: dict[str, Any]) -> None:
+    """Deja constancia en disco de que se va a pulsar Publish.
+
+    Es la unica senal que sobrevive a un timeout, a un cierre del proceso o a un
+    reinicio de Windows. Si el archivo existe y no hubo confirmacion, el
+    trabajador da el resultado por incierto y no reintenta, porque el anuncio
+    puede haberse creado igualmente.
+    """
+    if not intent_path:
+        return
+    payload = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "pid": os.getpid(),
+        "sku": product.get("sku", ""),
+        "title": product.get("title", ""),
+        "url": getattr(driver, "current_url", ""),
+    }
+    intent_path.parent.mkdir(parents=True, exist_ok=True)
+    with intent_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def verify_publish_result(driver: webdriver.Chrome, timeout: int = 30) -> None:
     confirmations = (
         "your listing is now published",
@@ -826,6 +850,12 @@ def main() -> None:
     parser.add_argument("--strict-details", action="store_true", help="Falla si no completa descripcion o etiquetas.")
     parser.add_argument("--publish", action="store_true", help="Presiona Next y avanza al paso final. No hace clic final en Publish.")
     parser.add_argument("--confirm-publish", action="store_true", help="Publica realmente el articulo. Usar solo con confirmacion explicita.")
+    parser.add_argument(
+        "--intent-file",
+        type=Path,
+        default=None,
+        help="Archivo que se escribe justo antes de pulsar Publish para detectar resultados inciertos.",
+    )
     parser.add_argument("--start-maximized", action="store_true", default=True)
     args = parser.parse_args()
 
@@ -892,10 +922,13 @@ def main() -> None:
             return
 
         stage = "publish"
+        write_publish_intent(args.intent_file, driver, product)
         if not click_button(driver, "Publish"):
             raise RuntimeError("No pude presionar Publish.")
         stage = "publish-confirmation"
         verify_publish_result(driver)
+        print(f"[marketplace-browser] [listing-url:{driver.current_url}]", flush=True)
+        print("[marketplace-browser] [publish-confirmed]", flush=True)
         log("Publicacion confirmada por Facebook Marketplace.")
     except Exception as exc:
         screenshot = capture_failure(driver, stage, exc)

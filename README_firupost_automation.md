@@ -31,6 +31,48 @@ bloquean la cuenta y crean una alerta; no se reintentan a ciegas.
 La base persistente es `marketplace_bot.db`. Los JSON anteriores se conservan
 para compatibilidad y diagnostico.
 
+### Llave del panel
+
+El panel controla el bot entero, asi que pide una llave. Al arrancar genera un
+token nuevo, lo guarda en `marketplace_dashboard_token.txt` y lo incluye en el
+enlace que abre `iniciar_panel_marketplace.ps1`. Sin ese enlace el panel
+responde `No autorizado`; el token vive solo mientras el proceso este abierto.
+
+Si abres el panel a mano, usa la direccion completa con `?token=...` que imprime
+el script. El panel solo escucha en esta computadora: pedir `--host` distinto de
+`127.0.0.1` falla salvo que agregues `--allow-remote` a proposito.
+
+### Resultados de publicacion inciertos
+
+Justo antes de pulsar `Publish`, el publicador deja un archivo en
+`marketplace_publish_intents/`. Si despues de eso el proceso se corta por
+timeout, por un cierre inesperado o por un reinicio de Windows, el trabajador ve
+ese archivo y marca el trabajo como `blocked` con la alerta
+`PUBLISH_OUTCOME_UNKNOWN`. **No lo reintenta**, porque el anuncio pudo haberse
+creado y un reintento lo duplicaria.
+
+Para resolverlo: revisa Marketplace. Si el anuncio no existe, pulsa `Reintentar`
+en el calendario; el panel borra la marca y vuelve a encolar el trabajo. Si el
+anuncio si existe, cancela el elemento.
+
+Cuando una publicacion si se confirma, el bot guarda la URL del anuncio en
+`listing_url`, visible en el historial.
+
+### Horarios con variacion
+
+Publicar todos los dias a las 09:00, 12:00 y 15:00 clavadas es un patron
+mecanico. `Automatizacion > Variacion del horario (min)` mueve cada publicacion
+unos minutos al azar (7 por defecto, maximo 30). La variacion es estable: volver
+a generar la misma semana da los mismos horarios, y nunca llega a solapar dos
+espacios seguidos.
+
+### Reintentos
+
+Un fallo temporal no se reintenta siempre a la misma distancia: cada intento
+duplica la espera desde `retry_delay_minutes`, con tope de 6 horas y una
+variacion de mas o menos 20%. Al agotar `max_attempts` el trabajo queda
+`blocked`.
+
 ### Fotos por cuenta
 
 En `Automatizacion > Fotos definidas por producto y cuenta` se muestran las
@@ -92,6 +134,25 @@ puede incluirse en la rotacion semanal sin modificar `ArticulosGenerados.xlsx`.
 - `firupost_validation_report.xlsx`: reporte de productos publicables y productos con problemas.
 - `prompt_firupost_ia.txt`: prompt para el modulo `Responder Mensajes IA`.
 - `firupost_session_config.json`: resumen de rutas y opciones recomendadas para la sesion.
+
+## Pruebas
+
+El proyecto tiene una suite de regresion que corre sin red, sin Chrome y sin
+tocar la base real (cada prueba usa una base temporal):
+
+```powershell
+python -m pip install -r requirements_dev.txt
+python -m pytest
+```
+
+Cubre la cola y los reintentos (`tests/test_storage.py`), el calendario y la
+rotacion (`tests/test_scheduler.py`), las reglas que evitan anuncios duplicados
+(`tests/test_worker.py`) y la redaccion de anuncios
+(`tests/test_listing_builder.py`). Conviene correrla antes de tocar el
+publicador o el planificador.
+
+El repositorio ignora la base de datos, los tokens, las claves de IA, los logs y
+las capturas: revisa `.gitignore` antes de agregar archivos nuevos.
 
 ## Regenerar todo desde Google Sheets + WooCommerce
 
