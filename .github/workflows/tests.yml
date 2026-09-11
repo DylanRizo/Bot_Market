@@ -16,6 +16,11 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+          # El proyecto no tiene ningun archivo llamado requirements.txt, que es
+          # lo unico que la accion busca por defecto para calcular la cache.
+          cache-dependency-path: |
+            requirements_dev.txt
+            requirements_marketplace_bot.txt
 
       - name: Instalar dependencias
         run: python -m pip install -r requirements_dev.txt
