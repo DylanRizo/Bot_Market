@@ -135,6 +135,23 @@ puede incluirse en la rotacion semanal sin modificar `ArticulosGenerados.xlsx`.
 - `prompt_firupost_ia.txt`: prompt para el modulo `Responder Mensajes IA`.
 - `firupost_session_config.json`: resumen de rutas y opciones recomendadas para la sesion.
 
+## Instalacion desde el repositorio
+
+La configuracion con tus cuentas reales no viaja en el repositorio. Al clonar:
+
+```powershell
+python -m pip install -r requirements_marketplace_bot.txt
+copy marketplace_accounts.example.json marketplace_accounts.json
+```
+
+Edita `marketplace_accounts.json` con tus cuentas: una clave por cuenta, su
+`display_name`, un `debugger_address` distinto para cada una (9222, 9223, ...) y
+la carpeta de perfil de Chrome donde quedara iniciada la sesion de Facebook.
+
+Despues coloca `ArticulosGenerados.xlsx` y la carpeta `imagenes_firupost` junto
+a los archivos del bot. Ni el inventario, ni las fotos, ni la base de datos, ni
+los tokens estan en el repositorio: son datos tuyos.
+
 ## Pruebas
 
 El proyecto tiene una suite de regresion que corre sin red, sin Chrome y sin
