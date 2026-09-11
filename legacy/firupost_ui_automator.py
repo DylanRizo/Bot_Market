@@ -476,7 +476,7 @@ def fill_publish_form(
 
 
 def run_prepare_if_requested() -> None:
-    automator = SCRATCH_DIR / "firupost_automator.py"
+    automator = SCRATCH_DIR.parent / "firupost_automator.py"
     if not automator.exists():
         raise FileNotFoundError(f"No encuentro {automator}")
     subprocess.run(["python", str(automator), "--source", "sync"], cwd=str(SCRATCH_DIR), check=True)

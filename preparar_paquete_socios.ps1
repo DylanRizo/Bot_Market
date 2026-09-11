@@ -46,6 +46,13 @@ foreach ($name in $files) {
     Copy-Item -LiteralPath $path -Destination $package
 }
 
+# El panel carga su interfaz desde static/: sin esta carpeta no abre.
+$static = Join-Path $source "static"
+if (-not (Test-Path -LiteralPath $static)) {
+    throw "Falta la carpeta static con la interfaz del panel."
+}
+Copy-Item -LiteralPath $static -Destination $package -Recurse
+
 $accounts = @'
 {
   "accounts": {

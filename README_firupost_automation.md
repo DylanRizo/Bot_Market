@@ -121,10 +121,10 @@ puede incluirse en la rotacion semanal sin modificar `ArticulosGenerados.xlsx`.
 ## Archivos principales
 
 - `firupost_automator.py`: sincroniza inventario, genera descripciones, valida imagenes y crea el Excel compatible con FiruPost.
-- `firupost_launch_assistant.py`: ejecuta el preparador, crea un archivo de configuracion de sesion y abre FiruPost.
-- `firupost_ui_automator.py`: abre/adjunta FiruPost, espera la actualizacion, acepta licencia, entra a Publicar, carga imagenes/Excel y deja el formulario listo.
-- `abrir_sesion_facebook_firupost.ps1`: abre Chrome con el perfil que usa FiruPost para iniciar sesion una sola vez.
-- `publicar_prueba_sesion_abierta.ps1`: intenta publicar 1 producto usando una sesion ya abierta, sin pedir contrasena.
+- `legacy/firupost_launch_assistant.py`: ejecuta el preparador, crea un archivo de configuracion de sesion y abre FiruPost.
+- `legacy/firupost_ui_automator.py`: abre/adjunta FiruPost, espera la actualizacion, acepta licencia, entra a Publicar, carga imagenes/Excel y deja el formulario listo.
+- `legacy/abrir_sesion_facebook_firupost.ps1`: abre Chrome con el perfil que usa FiruPost para iniciar sesion una sola vez.
+- `legacy/publicar_prueba_sesion_abierta.ps1`: intenta publicar 1 producto usando una sesion ya abierta, sin pedir contrasena.
 - `facebook_marketplace_browser_automator.py`: plan B para llenar el formulario de Marketplace directo en navegador con la sesion abierta.
 - `inspeccionar_categorias_marketplace.ps1`: abre/llena un producto y muestra categorias visibles para resolver el bloqueo de `Category`.
 - `llenar_marketplace_sesion_abierta.ps1`: llena el formulario directo de Marketplace sin publicar por defecto.

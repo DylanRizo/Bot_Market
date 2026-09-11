@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Marketplace Bot Dashboard</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-mark">F</div>
+      <h1>FiruPost Marketplace Bot</h1>
+    </div>
+    <div class="toolbar">
+      <span id="saveState" class="pill">Sin guardar</span>
+      <button id="refreshBtn">Actualizar</button>
+      <button id="saveBtn" class="primary">Guardar</button>
+    </div>
+  </header>
+  <div class="layout">
+    <nav>
+      <button data-tab="assistant" class="active">Nueva publicación</button>
+      <button data-tab="autonomy">Automatización</button>
+      <button data-tab="overview">Actividad</button>
+      <button data-tab="inventory">Inventario</button>
+      <button data-tab="accounts">Cuentas</button>
+      <button data-tab="campaign">Avanzado</button>
+      <button data-tab="run">Diagnóstico</button>
+    </nav>
+    <main>
+      <section id="assistant" class="tab">
+        <div class="assistant-shell">
+          <div class="assistant-head">
+            <div>
+              <h2>Nueva campaña</h2>
+              <p class="muted">Elige los productos y el bot prepara fotos, descripción y variantes.</p>
+            </div>
+            <div class="assistant-destination">
+              <div class="assistant-account-picker">
+                <label for="assistantAccount">Cuenta de Marketplace</label>
+                <select id="assistantAccount"></select>
+              </div>
+              <div id="assistantAccountStatus" class="account-status">
+                <span class="dot"></span>
+                <div><strong>Comprobando cuenta</strong><span>Facebook Marketplace</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading">
+              <div><span class="step-label">Paso 1</span><h3>¿Qué quieres publicar?</h3></div>
+              <span id="assistantSelectionCount" class="selection-badge">0 seleccionados</span>
+            </div>
+            <div id="assistantFamilies" class="family-grid"></div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading">
+              <div><span class="step-label">Revisión</span><h3>Fotos y precio antes de publicar</h3></div>
+              <span class="selection-badge">Solo para esta campaña</span>
+            </div>
+            <p class="muted">Revisa las fotos, cambia su orden, quita las que no quieras y ajusta el precio. El inventario original no se modifica.</p>
+            <div id="assistantReview" class="review-empty">Selecciona un producto para revisar sus fotos y precio.</div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading">
+              <div><span class="step-label">Paso 2</span><h3>¿Cómo agrupamos las variantes?</h3></div>
+            </div>
+            <div class="format-grid">
+              <label class="format-choice">
+                <input type="radio" name="assistantStyle" value="grouped" checked>
+                <strong>Todo en un anuncio</strong>
+                <span>Recomendado para empezar</span>
+              </label>
+              <label class="format-choice">
+                <input type="radio" name="assistantStyle" value="individual">
+                <strong>Una por variante</strong>
+                <span>Separa cada talla y color</span>
+              </label>
+              <label class="format-choice">
+                <input type="radio" name="assistantStyle" value="grouped_by_color">
+                <strong>Una por color</strong>
+                <span>Agrupa las tallas</span>
+              </label>
+              <label class="format-choice">
+                <input type="radio" name="assistantStyle" value="grouped_by_size">
+                <strong>Una por talla</strong>
+                <span>Agrupa los colores</span>
+              </label>
+            </div>
+            <div class="ai-control">
+              <div>
+                <label><input id="assistantAiEnabled" type="checkbox" checked> Mejorar las descripciones automáticamente</label>
+                <small id="assistantAiStatus">Comprobando servicio de redacción...</small>
+              </div>
+              <div class="toolbar">
+                <button id="assistantConfigureAiBtn">Configurar IA</button>
+                <button id="assistantPreviewDescriptionBtn">Ver descripción de ejemplo</button>
+              </div>
+            </div>
+            <div id="assistantDescriptionPreview" class="description-preview hidden"></div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading">
+              <div><span class="step-label">Paso 3</span><h3>Programación</h3></div>
+            </div>
+            <div class="schedule-grid">
+              <div>
+                <label>Primera publicación</label>
+                <select id="assistantStartDelay">
+                  <option value="0">Ahora</option>
+                  <option value="15">En 15 minutos</option>
+                  <option value="30">En 30 minutos</option>
+                  <option value="60">En 1 hora</option>
+                </select>
+              </div>
+              <div>
+                <label>Tiempo entre anuncios</label>
+                <select id="assistantInterval">
+                  <option value="30">30 minutos</option>
+                  <option value="60" selected>1 hora</option>
+                  <option value="120">2 horas</option>
+                  <option value="240">4 horas</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="assistant-footer">
+            <div id="assistantSummary" class="summary"></div>
+            <div class="toolbar">
+              <button id="assistantBuildBtn">Guardar campaña</button>
+              <button id="assistantDryBtn" class="primary">Probar primero</button>
+              <button id="assistantPublishBtn" class="publish">Publicar campaña</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="autonomy" class="tab hidden">
+        <div class="assistant-shell">
+          <div class="autonomy-top">
+            <div>
+              <h2>Semana automática</h2>
+              <p class="muted">El bot selecciona productos, respeta el calendario y se detiene si Facebook necesita atención.</p>
+            </div>
+            <label class="autonomy-switch"><input id="autoEnabled" type="checkbox"> Bot activo</label>
+          </div>
+
+          <div class="metric-strip">
+            <div class="metric"><strong id="autoPublishedToday">0</strong><span>Publicadas hoy</span></div>
+            <div class="metric"><strong id="autoPending">0</strong><span>Pendientes</span></div>
+            <div class="metric"><strong id="autoBlocked">0</strong><span>Bloqueadas</span></div>
+            <div class="metric"><strong id="autoWorker">Detenido</strong><span>Trabajador</span></div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading"><div><span class="step-label">Reglas</span><h3>Cuándo debe trabajar</h3></div></div>
+            <div class="schedule-grid">
+              <div><label>Modo</label><select id="autoMode">
+                <option value="simulation">Simulación</option>
+                <option value="dry_run">Prueba sin publicar</option>
+                <option value="supervised">Supervisado</option>
+                <option value="semiautomatic">Calendario aprobado</option>
+                <option value="autonomous">Autónomo</option>
+              </select></div>
+              <div><label>Uso de cuentas</label><select id="autoAccountStrategy">
+                <option value="round_robin">Rotar entre cuentas</option>
+                <option value="all_accounts">Publicar en todas</option>
+              </select></div>
+              <div><label>Desde</label><input id="autoStart" type="time"></div>
+              <div><label>Hasta</label><input id="autoEnd" type="time"></div>
+              <div><label>Máximo diario</label><input id="autoMaxDaily" type="number" min="1" max="20"></div>
+              <div><label>Intervalo (minutos)</label><input id="autoInterval" type="number" min="30" step="15"></div>
+              <div><label>Días antes de repetir</label><input id="autoCooldown" type="number" min="0" max="30"></div>
+              <div><label title="Mueve cada publicación unos minutos al azar para que el horario no sea siempre idéntico.">Variación del horario (min)</label><input id="autoJitter" type="number" min="0" max="30"></div>
+            </div>
+            <label>Cuentas activas</label>
+            <div id="autoAccounts" class="weekday-row"></div>
+            <label>Días activos</label>
+            <div id="autoDays" class="weekday-row"></div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading"><div><span class="step-label">Producto nuevo</span><h3>Agregar fuera del inventario</h3></div></div>
+            <div class="custom-form">
+              <div class="wide"><label>Nombre</label><input id="customTitle" placeholder="Ej: Guantes deportivos Nike"></div>
+              <div><label>Precio</label><input id="customPrice" type="number" min="1" step="0.01"></div>
+              <div><label>Categoría</label><select id="customCategory"><option>Sports &amp; Outdoors</option><option>Men's clothing &amp; shoes</option><option>Women's clothing &amp; shoes</option><option>Other</option></select></div>
+              <div><label>Condición</label><select id="customCondition"><option>New</option><option>Used - Like New</option><option>Used - Good</option></select></div>
+              <div><label>Ubicación</label><input id="customLocation" value="Managua, Nicaragua"></div>
+              <div class="wide"><label>Etiquetas</label><input id="customTags" placeholder="deportivo, entrenamiento, gimnasio"></div>
+              <div class="full"><label>Descripción</label><textarea id="customDescription" rows="4" placeholder="Déjala vacía para generar una descripción local"></textarea></div>
+              <div class="wide"><label>Fotos nuevas</label><input id="customPhotos" type="file" accept="image/jpeg,image/png,image/webp" multiple></div>
+              <div><label><input id="customRotation" type="checkbox" checked> Incluir en rotación semanal</label></div>
+              <div id="customPhotoPreview" class="custom-photo-preview full"></div>
+              <div class="full toolbar"><button id="customSaveBtn" class="primary">Guardar producto</button></div>
+            </div>
+            <div id="customProductsList"></div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading"><div><span class="step-label">Catálogo</span><h3>Productos disponibles</h3></div></div>
+            <div id="autoFamilies" class="family-row"></div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading">
+              <div><span class="step-label">Fotos</span><h3>Fotos definidas por producto y cuenta</h3></div>
+              <span class="selection-badge">Máximo 10 por publicación</span>
+            </div>
+            <p class="muted">Marca las fotos que usará cada cuenta. Una misma foto puede quedar seleccionada en cuentas diferentes.</p>
+            <div id="autoPhotoAssignments" class="photo-assignment-list"></div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading">
+              <div><span class="step-label">Calendario</span><h3>Próximas publicaciones</h3></div>
+              <div class="toolbar">
+                <button id="autoSaveBtn">Guardar reglas</button>
+                <button id="autoGenerateBtn" class="primary">Generar semana</button>
+                <button id="autoApproveBtn">Aprobar pendientes</button>
+              </div>
+            </div>
+            <div id="autonomyCalendar" class="calendar-week"></div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading"><div><span class="step-label">Atención</span><h3>Alertas</h3></div></div>
+            <div id="autoAlerts" class="review-empty">No hay alertas abiertas.</div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading"><div><span class="step-label">Resumen</span><h3>Últimos 7 días</h3></div></div>
+            <div id="autoReport" class="table-wrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="overview" class="tab hidden">
+        <div class="activity-shell">
+          <div class="activity-head">
+            <div>
+              <h2>Actividad</h2>
+              <p class="muted">Seguimiento de publicaciones preparadas, pendientes y completadas.</p>
+            </div>
+            <div class="toolbar">
+              <button id="openSessionQuick">Abrir sesión</button>
+              <button id="clearActivityBtn">Limpiar historial</button>
+            </div>
+          </div>
+          <div class="metric-strip">
+            <div class="metric"><strong id="activityPending">0</strong><span>Pendientes</span></div>
+            <div class="metric"><strong id="activityRunning">0</strong><span>En proceso</span></div>
+            <div class="metric"><strong id="activityPrepared">0</strong><span>Preparadas</span></div>
+            <div class="metric"><strong id="activityPublished">0</strong><span>Publicadas</span></div>
+            <div class="metric"><strong id="activityFailed">0</strong><span>Fallidas</span></div>
+          </div>
+          <div id="activityEmpty" class="empty-activity">Todavía no hay actividad. Crea una prueba o publica una campaña para verla aquí.</div>
+          <div id="activityTableWrap" class="table-wrap activity-table hidden">
+            <table>
+              <thead><tr><th>Hora</th><th>Producto</th><th>Estado</th><th>Cuenta</th><th>Detalle</th></tr></thead>
+              <tbody id="activityTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="campaign" class="tab hidden">
+        <div class="grid">
+          <div class="panel span-12">
+            <h2>Opciones generales</h2>
+            <div class="row">
+              <div class="col-3">
+                <label>Cuenta por defecto</label>
+                <select id="defaultAccount"></select>
+              </div>
+              <div class="col-3">
+                <label>Intervalo entre publicaciones (min)</label>
+                <input id="defaultInterval" type="number" min="0" step="1" />
+              </div>
+              <div class="col-3">
+                <label>Categoria</label>
+                <input id="defaultCategory" />
+              </div>
+              <div class="col-3">
+                <label>Condicion</label>
+                <select id="defaultCondition">
+                  <option>New</option>
+                  <option>Used - Like New</option>
+                  <option>Used - Good</option>
+                  <option>Used - Fair</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="panel span-12">
+            <div class="toolbar" style="justify-content: space-between;">
+              <h2>Jobs de publicacion</h2>
+              <button id="addJobBtn">Agregar job</button>
+            </div>
+            <div id="jobs" class="jobs"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="accounts" class="tab hidden">
+        <div class="grid">
+          <div class="panel span-12">
+            <div class="toolbar" style="justify-content: space-between;">
+              <h2>Cuentas Marketplace</h2>
+              <button id="addAccountBtn">Agregar cuenta</button>
+            </div>
+            <div id="accountsList" class="jobs"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="inventory" class="tab hidden">
+        <div class="grid">
+          <div class="panel span-12">
+            <h2>Inventario</h2>
+            <div class="row">
+              <div class="col-8">
+                <label>Buscar por SKU, titulo o categoria</label>
+                <input id="inventorySearch" placeholder="Ej: sin mangas, leggings, TSBK" />
+              </div>
+              <div class="col-4">
+                <label>Filtro rapido</label>
+                <select id="inventoryQuick">
+                  <option value="">Todo</option>
+                  <option value="camisa de compresion">Camisas compresion</option>
+                  <option value="sin mangas">Sin mangas</option>
+                  <option value="leggins">Leggins</option>
+                  <option value="enterizo">Enterizos</option>
+                </select>
+              </div>
+            </div>
+            <div class="table-wrap" style="margin-top: 12px;">
+              <table>
+                <thead><tr><th>#</th><th>SKU</th><th>Titulo</th><th>Precio</th><th>Imagen</th><th>Usar</th></tr></thead>
+                <tbody id="inventoryTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="run" class="tab hidden">
+        <div class="grid">
+          <div class="panel span-12">
+            <h2>Ejecutar</h2>
+            <div class="row">
+              <div class="col-3">
+                <label>Modo</label>
+                <select id="runMode">
+                  <option value="plan">Solo plan</option>
+                  <option value="dry">Dry-run sin publicar</option>
+                  <option value="advance">Avanzar a Next</option>
+                  <option value="publish">Publicar</option>
+                </select>
+              </div>
+              <div class="col-2">
+                <label>Ignorar esperas</label>
+                <select id="runFast">
+                  <option value="true">Si</option>
+                  <option value="false">No</option>
+                </select>
+              </div>
+              <div class="col-2">
+                <label>Max jobs</label>
+                <input id="runMaxJobs" type="number" min="0" step="1" value="0" />
+              </div>
+              <div class="col-5">
+                <label>Confirmacion para publicar</label>
+                <input id="publishConfirm" placeholder="Escribe PUBLICAR para permitir modo Publicar" />
+              </div>
+            </div>
+            <div class="toolbar" style="margin-top: 12px;">
+              <button id="startRunBtn" class="primary">Iniciar</button>
+              <button id="stopRunBtn" class="danger">Detener</button>
+              <span id="processStatus" class="pill">idle</span>
+            </div>
+          </div>
+          <div class="panel span-12">
+            <h2>Logs</h2>
+            <div id="logs" class="logs"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+  <div id="publishDialog" class="confirm-overlay hidden">
+    <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="publishDialogTitle">
+      <h2 id="publishDialogTitle">Confirmar publicación</h2>
+      <p id="publishDialogText">El bot abrirá Marketplace y publicará los productos seleccionados en la cuenta indicada.</p>
+      <div class="toolbar" style="justify-content: flex-end; margin-top: 16px;">
+        <button id="cancelPublishBtn">Cancelar</button>
+        <button id="confirmPublishBtn" class="publish">Sí, publicar</button>
+      </div>
+    </div>
+  </div>
+  <div id="aiDialog" class="confirm-overlay hidden">
+    <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="aiDialogTitle">
+      <h2 id="aiDialogTitle">Configurar descripciones con IA</h2>
+      <p>Introduce tu clave de OpenAI. Se guardará cifrada para tu usuario de Windows y no se mostrará nuevamente.</p>
+      <label>Clave de OpenAI</label>
+      <input id="aiKeyInput" type="password" autocomplete="off" placeholder="sk-..." />
+      <div class="toolbar" style="justify-content: flex-end; margin-top: 16px;">
+        <button id="cancelAiBtn">Cancelar</button>
+        <button id="saveAiBtn" class="primary">Guardar clave</button>
+      </div>
+    </div>
+  </div>
+  <script>window.DASHBOARD_TOKEN = "__MB_TOKEN__";</script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -9,7 +9,7 @@ from pathlib import Path
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 FIRUPOST_EXE = Path(r"C:\FiruPost\FiruPost.exe")
-AUTOMATOR = SCRATCH_DIR / "firupost_automator.py"
+AUTOMATOR = SCRATCH_DIR.parent / "firupost_automator.py"
 ARTICLES_EXCEL = SCRATCH_DIR / "ArticulosGenerados.xlsx"
 IMAGES_ROOT = SCRATCH_DIR / "imagenes_firupost"
 REPORT_EXCEL = SCRATCH_DIR / "firupost_validation_report.xlsx"

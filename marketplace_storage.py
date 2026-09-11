@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import sqlite3
 import uuid
@@ -13,7 +14,21 @@ from typing import Any, Iterator
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
-DEFAULT_DB = SCRATCH_DIR / "marketplace_bot.db"
+
+
+def default_db_path() -> Path:
+    """Ruta de la base, resuelta en el momento de usarla.
+
+    MARKETPLACE_BOT_DB permite apuntar a otra base sin tocar el codigo: lo usan
+    las pruebas para no rozar la base real, y sirve para trabajar sobre una
+    copia. Se lee en cada llamada a proposito: si se fijara al importar el
+    modulo, quien lo importe antes de definir la variable se llevaria la ruta
+    equivocada.
+    """
+    return Path(os.environ.get("MARKETPLACE_BOT_DB") or SCRATCH_DIR / "marketplace_bot.db")
+
+
+DEFAULT_DB = default_db_path()
 DEFAULT_ACTIVITY = SCRATCH_DIR / "marketplace_activity.json"
 FINAL_STATUSES = {"published", "tested", "prepared", "skipped", "cancelled"}
 RETRY_MAX_DELAY_MINUTES = 6 * 60
