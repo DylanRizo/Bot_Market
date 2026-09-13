@@ -43,3 +43,14 @@ imagenes_firupost/
 # Configuracion local con datos propios
 marketplace_accounts.json
 marketplace_campaign_example.json
+
+# --- Integracion con el SGI y Google Drive ---
+# La llave del SGI (cifrada), el token de Drive, la URL del SGI, los IDs de
+# carpetas, las equivalencias de codigos y los reportes son datos del negocio.
+.sgi_integration_key.bin
+token_google_drive.json
+marketplace_integrations.json
+sgi_drive_cache/
+sgi_drive_index.json
+sgi_codigos_anteriores.json
+sgi_sync_report.json

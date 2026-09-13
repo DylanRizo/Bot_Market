@@ -186,3 +186,90 @@ def test_una_ruta_post_inventada_da_404(panel):
     }, b"{}")
     assert estado == 404
     assert json.loads(cuerpo)["ok"] is False
+
+
+# --- conexion con el SGI -----------------------------------------------------
+
+LLAVE_FALSA = "k" * 43
+
+
+@pytest.fixture()
+def sgi_aislado(panel, monkeypatch, tmp_path):
+    """El panel nunca toca la llave, el token de Drive ni el reporte reales."""
+    base, token, dashboard = panel
+    guardadas = []
+    monkeypatch.setattr(dashboard, "SGI_REPORT_PATH", tmp_path / "reporte.json")
+    monkeypatch.setattr(dashboard, "SGI_DRIVE_TOKEN_PATH", tmp_path / "token.json")
+    monkeypatch.setattr(dashboard, "load_integration_settings", lambda: {"sgi": {"base_url": "https://sgi.example"}})
+    monkeypatch.setattr(dashboard, "integration_key_configured", lambda: bool(guardadas))
+    monkeypatch.setattr(dashboard, "save_integration_key", guardadas.append)
+    cabeceras = {"Cookie": f"mb_session={token}", "X-Marketplace-Token": token}
+    return base, cabeceras, dashboard, guardadas
+
+
+def test_guardar_la_llave_no_la_devuelve(sgi_aislado):
+    base, cabeceras, _, guardadas = sgi_aislado
+    estado, cuerpo, _ = pedir(base, "/api/sgi/key", "POST", cabeceras, json.dumps({"key": LLAVE_FALSA}).encode())
+    assert estado == 200
+    assert guardadas == [LLAVE_FALSA]
+    assert LLAVE_FALSA.encode() not in cuerpo
+    assert json.loads(cuerpo)["sgi"]["key_configured"] is True
+
+
+def test_una_llave_mal_formada_se_rechaza_sin_eco(panel, monkeypatch, tmp_path):
+    base, token, dashboard = panel
+    monkeypatch.setattr(dashboard, "save_integration_key", lambda key: dashboard_real_save(key, tmp_path))
+    cabeceras = {"Cookie": f"mb_session={token}", "X-Marketplace-Token": token}
+    estado, cuerpo, _ = pedir(base, "/api/sgi/key", "POST", cabeceras, json.dumps({"key": "corta-secreta"}).encode())
+    assert estado >= 400
+    assert b"corta-secreta" not in cuerpo
+    assert not (tmp_path / "llave.bin").exists()
+
+
+def dashboard_real_save(key, tmp_path):
+    from sgi_client import save_integration_key
+
+    save_integration_key(key, tmp_path / "llave.bin")
+
+
+def test_el_estado_de_automatizacion_incluye_el_sgi_sin_secretos(sgi_aislado):
+    base, cabeceras, _, _ = sgi_aislado
+    estado, cuerpo, _ = pedir(base, "/api/autonomy", headers=cabeceras)
+    assert estado == 200
+    sgi = json.loads(cuerpo)["autonomy"]["sgi"]
+    assert sgi["key_configured"] is False and sgi["drive_authorized"] is False
+    assert "key" not in sgi
+
+
+def test_sincronizar_con_la_llave_revocada_informa_el_codigo(sgi_aislado, monkeypatch):
+    base, cabeceras, _, _ = sgi_aislado
+    import marketplace_scheduler_worker as worker
+    from sgi_client import SgiError
+
+    def rechazada(store):
+        raise SgiError("KEY_REJECTED", "El SGI rechazo la llave: revocada o caducada.")
+
+    monkeypatch.setattr(worker, "refresh_from_sgi", rechazada)
+    estado, cuerpo, _ = pedir(base, "/api/sgi/sync", "POST", cabeceras, b"{}")
+    assert estado == 502
+    respuesta = json.loads(cuerpo)
+    assert respuesta["ok"] is False and respuesta["code"] == "SGI_KEY_REJECTED"
+
+
+def test_sincronizar_devuelve_el_reporte(sgi_aislado, monkeypatch):
+    base, cabeceras, dashboard, _ = sgi_aislado
+    import marketplace_scheduler_worker as worker
+
+    reporte = {"generated_at": "2026-09-12T10:00:00", "publishable": ["CMP-NEG-M"], "price_issues": [],
+               "without_photos": [{"code": "BOL-NEG-U", "old_code": ""}], "local_photos": []}
+
+    def sincroniza(store):
+        dashboard.SGI_REPORT_PATH.write_text(json.dumps(reporte), encoding="utf-8")
+        return reporte
+
+    monkeypatch.setattr(worker, "refresh_from_sgi", sincroniza)
+    estado, cuerpo, _ = pedir(base, "/api/sgi/sync", "POST", cabeceras, b"{}")
+    assert estado == 200
+    sgi = json.loads(cuerpo)["sgi"]["report"]
+    assert sgi["publishable"] == ["CMP-NEG-M"]
+    assert sgi["without_photos"][0]["code"] == "BOL-NEG-U"

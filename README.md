@@ -61,6 +61,33 @@ powershell -ExecutionPolicy Bypass -File .\iniciar_panel_marketplace.ps1        
 El panel pide una llave que genera al arrancar; el script abre el enlace ya con
 ella incluida. Solo escucha en `127.0.0.1`.
 
+## Conexion con el SGI y Google Drive (opcional)
+
+En lugar del Excel manual, el bot puede tomar el inventario de un SGI La Comarca
+y las fotos de Google Drive:
+
+- publica **solo lo que tiene stock** en el SGI, con su **precio de venta**;
+- si un producto tiene precios distintos entre bodegas, precio en revision o sin
+  precio, **no lo publica** y lo muestra en el panel;
+- usa las fotos de Drive nombradas con el codigo del SGI
+  (`CODIGO-COLOR - descripcion - 001.jpg`); si no hay, usa la foto local de
+  respaldo. Nunca usa flyers, publicidad, infografias ni fotos de inventario;
+- justo antes de cada anuncio vuelve a comprobar que el producto sigue con stock.
+
+Configuracion:
+
+1. `copy marketplace_integrations.example.json marketplace_integrations.json` y
+   pon la direccion del SGI y las carpetas de Drive. Ese archivo no se versiona.
+2. En el SGI, **Configuracion → Integraciones**, crea una llave de solo lectura.
+   Se muestra una sola vez.
+3. En el panel, pestana **Automatizacion → Conexion con el SGI**, pega la llave.
+   Se guarda cifrada con DPAPI y no vuelve a mostrarse. Pulsa
+   **Autorizar Google Drive** (permiso de solo lectura) y luego
+   **Sincronizar ahora**.
+
+Si revocas la llave en el SGI, el trabajador deja de publicar y levanta una
+alerta.
+
 ## Estructura
 
 ```
@@ -73,6 +100,9 @@ marketplace_listing_builder.py   titulos, descripciones, agrupacion de variantes
 marketplace_catalog.py           lee el inventario y arma las familias de producto
 marketplace_ai_descriptions.py   redaccion opcional por IA
 marketplace_bot_dashboard.py     servidor del panel
+sgi_client.py                    lectura del catalogo del SGI con la llave de integracion
+drive_photos.py                  fotos de producto desde Google Drive (solo lectura)
+sgi_sync.py                      genera el Excel y las carpetas de fotos desde SGI + Drive
 static/                          frontend del panel (html, css, js)
 firupost_automator.py            sincroniza Google Sheets + WooCommerce al Excel
 legacy/                          generacion anterior, ya no se usa

@@ -158,6 +158,23 @@
             <div class="metric"><strong id="autoWorker">Detenido</strong><span>Trabajador</span></div>
           </div>
 
+          <div class="assistant-section" id="sgiSection">
+            <div class="section-heading">
+              <div><span class="step-label">Inventario</span><h3>Conexión con el SGI</h3></div>
+              <div class="toolbar">
+                <button id="sgiDriveBtn">Autorizar Google Drive</button>
+                <button id="sgiSyncBtn" class="primary">Sincronizar ahora</button>
+              </div>
+            </div>
+            <p class="muted">El bot publica solo lo que tiene stock en el SGI, con su precio de venta, y usa las fotos de producto de Drive.</p>
+            <div id="sgiStatus" class="metric-strip"></div>
+            <div class="schedule-grid">
+              <div><label for="sgiKey">Llave de integración del SGI</label><input id="sgiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Pégala aquí; no se vuelve a mostrar"></div>
+              <div><label>&nbsp;</label><button id="sgiKeyBtn">Guardar llave</button></div>
+            </div>
+            <div id="sgiLists"></div>
+          </div>
+
           <div class="assistant-section">
             <div class="section-heading"><div><span class="step-label">Reglas</span><h3>Cuándo debe trabajar</h3></div></div>
             <div class="schedule-grid">

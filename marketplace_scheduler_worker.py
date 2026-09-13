@@ -32,6 +32,13 @@ UNCERTAIN_PUBLISH_DETAIL = (
     "el anuncio puede existir ya."
 )
 
+SGI_STATE_KEY = "sgi_sync"
+SGI_SYNC_INTERVAL_SECONDS = 60 * 60
+SGI_RETRY_AFTER_FAILURE_SECONDS = 10 * 60
+# Motivos para no publicar que no son fallas: se omite el trabajo y se sigue.
+SGI_SKIP_CODES = {"OUT_OF_STOCK", "PRICE_ISSUE", "NO_PHOTOS"}
+SGI_RETRY_CODES = {"UNAVAILABLE", "RATE_LIMITED", "INVALID_RESPONSE"}
+
 
 def log(message: str) -> None:
     print(f"[scheduler {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}", flush=True)
@@ -193,6 +200,83 @@ def campaign_for_item(item: dict[str, Any], config: dict[str, Any]) -> Path:
     return path
 
 
+def sgi_configured() -> bool:
+    """El SGI se usa solo con direccion y llave configuradas; si no, el bot sigue con su Excel."""
+    try:
+        from sgi_client import integration_key_configured, load_settings
+    except ImportError:
+        return False
+    return bool((load_settings().get("sgi") or {}).get("base_url")) and integration_key_configured()
+
+
+def sgi_sync_due(store: MarketplaceStore, now: float | None = None) -> bool:
+    state = store.worker_state(SGI_STATE_KEY)
+    attempted = float(state.get("attempted_at_epoch") or 0)
+    wait = SGI_SYNC_INTERVAL_SECONDS if state.get("status") == "ok" else SGI_RETRY_AFTER_FAILURE_SECONDS
+    return (now if now is not None else time.time()) - attempted >= wait
+
+
+def refresh_from_sgi(store: MarketplaceStore) -> dict[str, Any]:
+    """Regenera el Excel y las fotos desde el SGI y Drive, registra el resultado y relanza el error."""
+    from sgi_sync import sync_from_local_configuration
+
+    attempted = time.time()
+    try:
+        report = sync_from_local_configuration()
+    except Exception as exc:
+        store.heartbeat(
+            SGI_STATE_KEY,
+            {
+                "attempted_at_epoch": attempted,
+                "code": sgi_failure_code(exc),
+                "detail": str(exc)[:300],
+                "status": "error",
+            },
+        )
+        raise
+    store.heartbeat(
+        SGI_STATE_KEY,
+        {
+            "attempted_at_epoch": attempted,
+            "generated_at": report["generated_at"],
+            "price_issues": len(report["price_issues"]),
+            "publishable": len(report["publishable"]),
+            "status": "ok",
+            "without_photos": len(report["without_photos"]),
+        },
+    )
+    return report
+
+
+def sgi_failure_code(exc: Exception) -> str:
+    if exc.__class__.__name__ == "DriveNotAuthorized":
+        return "DRIVE_NOT_AUTHORIZED"
+    code = str(getattr(exc, "code", "") or "")
+    if not code or code in SGI_RETRY_CODES:
+        return "SGI_UNAVAILABLE"
+    return f"SGI_{code}"
+
+
+def sgi_gate(store: MarketplaceStore, item: dict[str, Any]) -> tuple[bool, str, str]:
+    """Justo antes de publicar revalida contra el SGI el stock, el precio y las fotos.
+
+    Tambien regenera el Excel: un anuncio agrupado no debe incluir una talla que
+    se vendio despues de armar la semana.
+    """
+    if not sgi_configured():
+        return True, "", ""
+    prefixes = (item.get("job") or {}).get("sku_prefixes") or []
+    if not prefixes:
+        return True, "", ""
+    from sgi_sync import revalidate_from_report
+
+    try:
+        report = refresh_from_sgi(store)
+    except Exception as exc:
+        return False, sgi_failure_code(exc), str(exc)[:500]
+    return revalidate_from_report(report, prefixes)
+
+
 def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, Any]) -> None:
     queue_id = item["id"]
     mode = config["mode"]
@@ -225,6 +309,27 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
         store.update_queue_item(queue_id, status="blocked", detail=detail, finished_at=now_iso())
         store.create_alert("warning", "IMAGE_REUSED", detail, item["account"], queue_id)
         log(f"Foto repetida bloqueada: {item['name']} | cuenta={item['account']}")
+        return
+
+    ok, gate_code, gate_detail = sgi_gate(store, item)
+    if not ok:
+        if gate_code in SGI_SKIP_CODES:
+            store.finish_attempt(attempt_id, "skipped", gate_code, gate_detail)
+            store.update_queue_item(queue_id, status="skipped", detail=gate_detail, finished_at=now_iso())
+            # Agotarse es normal; un precio dudoso o una foto faltante piden accion.
+            if gate_code != "OUT_OF_STOCK":
+                store.create_alert("warning", gate_code, gate_detail, item["account"], queue_id)
+            log(f"Omitido {item['name']}: {gate_detail}")
+            return
+        if gate_code == "SGI_UNAVAILABLE":
+            store.finish_attempt(attempt_id, "failed", gate_code, gate_detail)
+            store.schedule_retry(queue_id, int(config["retry_delay_minutes"]), gate_detail)
+            log(f"SGI no disponible para {item['name']}; se reintentara.")
+            return
+        store.finish_attempt(attempt_id, "blocked", gate_code, gate_detail)
+        store.update_queue_item(queue_id, status="blocked", detail=gate_detail, finished_at=now_iso())
+        store.create_alert("critical", gate_code, gate_detail, item["account"], queue_id)
+        log(f"Bloqueado {item['name']}: {gate_detail}")
         return
 
     ok, error_code, detail = preflight(item, config)
@@ -341,6 +446,19 @@ def run_once(store: MarketplaceStore) -> bool:
     store.heartbeat("scheduler", {"status": "idle", "pid": __import__("os").getpid(), "enabled": config["enabled"]})
     if not config["enabled"]:
         return False
+    if sgi_configured() and sgi_sync_due(store):
+        try:
+            report = refresh_from_sgi(store)
+            log(
+                f"Sincronizado con el SGI: {len(report['publishable'])} publicables, "
+                f"{len(report['price_issues'])} con precio dudoso, {len(report['without_photos'])} sin foto."
+            )
+        except Exception as exc:
+            code = sgi_failure_code(exc)
+            store.create_alert("warning" if code == "SGI_UNAVAILABLE" else "critical", code, str(exc)[:500])
+            log(f"No se pudo sincronizar con el SGI: {code}")
+            # Sin catalogo fresco no se arma una semana con existencias viejas.
+            return False
     ensure_future_calendar(store, config)
     item = store.claim_due()
     if not item:

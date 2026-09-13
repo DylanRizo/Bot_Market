@@ -195,11 +195,74 @@
       $("autoBlocked").textContent = counts.blocked || 0;
       $("autoWorker").textContent = autonomy.worker?.process_running ? "Activo" : "Detenido";
 
+      renderSgi();
       renderAutonomyCalendar();
       renderAutonomyAlerts();
       renderAutonomyReport();
       renderCustomProducts();
       renderAutoPhotoAssignments();
+    }
+
+    function renderSgi() {
+      const sgi = state.autonomy?.sgi || {};
+      const report = sgi.report || {};
+      const sync = sgi.state || {};
+      const lastSync = report.generated_at ? new Date(report.generated_at).toLocaleString("es-NI") : "Nunca";
+      const metric = (value, label) => `<div class="metric"><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span></div>`;
+      const driveLabel = sgi.drive_authorizing ? "Autorizando…" : sgi.drive_authorized ? "Autorizado" : "Falta autorizar";
+      $("sgiStatus").innerHTML = [
+        metric(sgi.key_configured ? "Configurada" : "Falta", "Llave del SGI"),
+        metric(driveLabel, "Google Drive"),
+        metric((report.publishable || []).length, "Listos para publicar"),
+        metric(lastSync, sync.status === "error" ? `Última sincronización · error ${sync.code || ""}` : "Última sincronización"),
+      ].join("");
+
+      const block = (title, entries, describe) => entries.length
+        ? `<div class="alert-row"><div><strong>${escapeHtml(title)} (${entries.length})</strong><br><span>${entries.map(entry => escapeHtml(describe(entry))).join(" · ")}</span></div></div>`
+        : "";
+      const problems = [
+        sync.status === "error" && sync.detail ? `<p class="muted">${escapeHtml(sync.detail)}</p>` : "",
+        sgi.drive_error ? `<p class="muted">Google Drive: ${escapeHtml(sgi.drive_error)}</p>` : "",
+      ].join("");
+      const lists = [
+        block("Precio dudoso: no se publican", report.price_issues || [], entry => `${entry.code} (${entry.detail})`),
+        block("Con stock pero sin foto", report.without_photos || [], entry => entry.code),
+        block("Con foto local mientras marketing sube la de Drive", report.local_photos || [], code => code),
+      ].join("");
+      $("sgiLists").innerHTML = problems + (lists || (report.generated_at ? `<p class="muted">Todo lo que tiene stock está listo para publicarse.</p>` : ""));
+    }
+
+    async function saveSgiKey() {
+      const key = $("sgiKey").value.trim();
+      if (!key) {
+        toast("Pega la llave de integración que generaste en el SGI.");
+        return;
+      }
+      const result = await api("/api/sgi/key", { method: "POST", body: JSON.stringify({ key }) });
+      $("sgiKey").value = "";
+      state.autonomy = { ...(state.autonomy || {}), sgi: result.sgi };
+      renderSgi();
+      toast("Llave guardada cifrada en este equipo.");
+    }
+
+    async function syncSgi() {
+      const button = $("sgiSyncBtn");
+      button.disabled = true;
+      button.textContent = "Sincronizando…";
+      try {
+        const result = await api("/api/sgi/sync", { method: "POST", body: "{}" });
+        state.autonomy = result.autonomy;
+        renderAutonomy();
+        toast(`${(result.sgi?.report?.publishable || []).length} productos listos para publicar.`);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Sincronizar ahora";
+      }
+    }
+
+    async function authorizeDrive() {
+      const result = await api("/api/sgi/drive/authorize", { method: "POST", body: "{}" });
+      toast(result.message);
     }
 
     function renderAutonomyCalendar() {
@@ -1109,6 +1172,9 @@
     $("autoSaveBtn").onclick = saveAutonomy;
     $("autoGenerateBtn").onclick = generateAutonomyWeek;
     $("autoApproveBtn").onclick = approveAutonomyWeek;
+    $("sgiKeyBtn").onclick = () => saveSgiKey().catch(error => toast(error.message));
+    $("sgiSyncBtn").onclick = () => syncSgi().catch(error => toast(error.message));
+    $("sgiDriveBtn").onclick = () => authorizeDrive().catch(error => toast(error.message));
     $("autoEnabled").onchange = saveAutonomy;
     $("customPhotos").onchange = () => uploadCustomPhotos([...$("customPhotos").files]);
     $("customSaveBtn").onclick = () => saveCustomProduct().catch(error => toast(error.message));

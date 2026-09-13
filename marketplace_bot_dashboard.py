@@ -45,6 +45,11 @@ from marketplace_ai_descriptions import (
     sanitize_tags,
     save_api_key,
 )
+from sgi_client import (
+    integration_key_configured,
+    load_settings as load_integration_settings,
+    save_integration_key,
+)
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
@@ -67,70 +72,10 @@ SESSION_TOKEN = ""
 STORE = MarketplaceStore(default_db_path())
 STORE.migrate_activity(ACTIVITY_PATH)
 
-_LEGACY_ASSISTANT_PRESETS: dict[str, dict[str, Any]] = {
-    "compression_short": {
-        "label": "Camisas manga corta de compresion",
-        "description": "Manga corta",
-        "sku_prefixes": ["TS"],
-        "exclude_title_contains": ["sin mangas"],
-        "category": "Men's clothing & shoes",
-    },
-    "compression_sleeveless": {
-        "label": "Camisas sin mangas de compresion",
-        "description": "Sin mangas",
-        "title_contains": ["sin mangas"],
-        "category": "Men's clothing & shoes",
-    },
-    "leggins": {
-        "label": "Leggins de campana",
-        "description": "Varios colores y tallas",
-        "title_contains": ["leggins"],
-        "category": "Men's clothing & shoes",
-    },
-    "enterizos": {
-        "label": "Enterizos de entrenamiento",
-        "description": "Varios colores y tallas",
-        "title_contains": ["enterizo"],
-        "category": "Men's clothing & shoes",
-    },
-    "shorts": {
-        "label": "Shorts deportivos",
-        "description": "Varios colores y tallas",
-        "title_contains": ["shorts"],
-        "category": "Men's clothing & shoes",
-    },
-    "bolsos": {
-        "label": "Bolsos deportivos",
-        "description": "Bolsos Nike",
-        "title_contains": ["bolsos"],
-        "category": "Sports & Outdoors",
-    },
-    "durags": {
-        "label": "Durags",
-        "description": "Varios colores",
-        "title_contains": ["durags"],
-        "category": "Men's clothing & shoes",
-    },
-    "munequeras": {
-        "label": "Muñequeras deportivas",
-        "description": "Rojo, azul y gris",
-        "title_contains": ["muñequeras"],
-        "category": "Sports & Outdoors",
-    },
-    "straps": {
-        "label": "Straps para gimnasio",
-        "description": "Negro y verde",
-        "title_contains": ["straps"],
-        "category": "Sports & Outdoors",
-    },
-}
-
-_LEGACY_STYLE_TO_MODE: dict[str, tuple[str, str | None]] = {
-    "grouped": ("grouped", None),
-    "individual": ("individual", None),
-    "grouped_by_color": ("grouped", "color"),
-    "grouped_by_size": ("grouped", "size"),
-}
+SGI_DRIVE_TOKEN_PATH = SCRATCH_DIR / "token_google_drive.json"
+SGI_REPORT_PATH = SCRATCH_DIR / "sgi_sync_report.json"
+_drive_authorization_lock = threading.Lock()
+_drive_authorization: dict[str, Any] = {"error": "", "running": False}
 
 
 def json_load(path: Path, fallback: Any) -> Any:
@@ -140,6 +85,49 @@ def json_load(path: Path, fallback: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return fallback
+
+
+def sgi_status() -> dict[str, Any]:
+    """Estado de la conexion con el SGI y Drive. Nunca incluye la llave."""
+    settings = load_integration_settings()
+    report = json_load(SGI_REPORT_PATH, {})
+    return {
+        "base_url": str((settings.get("sgi") or {}).get("base_url") or ""),
+        "drive_authorized": SGI_DRIVE_TOKEN_PATH.is_file(),
+        "drive_authorizing": bool(_drive_authorization["running"]),
+        "drive_error": str(_drive_authorization["error"]),
+        "drive_folders": len((settings.get("drive") or {}).get("root_folder_ids") or []),
+        "key_configured": integration_key_configured(),
+        "report": {
+            "catalog_items": report.get("catalog_items", 0),
+            "generated_at": report.get("generated_at"),
+            "local_photos": report.get("local_photos", []),
+            "price_issues": report.get("price_issues", []),
+            "publishable": report.get("publishable", []),
+            "without_photos": report.get("without_photos", []),
+        },
+        "state": STORE.worker_state("sgi_sync"),
+    }
+
+
+def start_drive_authorization() -> None:
+    """Abre el consentimiento de Google en el navegador sin bloquear el panel."""
+    with _drive_authorization_lock:
+        if _drive_authorization["running"]:
+            return
+        _drive_authorization.update(error="", running=True)
+
+    def authorize() -> None:
+        try:
+            from drive_photos import DriveLibrary
+
+            DriveLibrary.connect(interactive=True)
+        except Exception as exc:
+            _drive_authorization["error"] = str(exc)[:300]
+        finally:
+            _drive_authorization["running"] = False
+
+    threading.Thread(target=authorize, daemon=True).start()
 
 
 def json_save(path: Path, payload: Any) -> None:
@@ -235,6 +223,7 @@ def autonomy_payload() -> dict[str, Any]:
         "families": families,
         "custom_products": custom_products,
         "photo_assignments": photo_assignments,
+        "sgi": sgi_status(),
     }
 
 
@@ -1157,6 +1146,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
         json_save(ACTIVITY_PATH, activity)
         self.send_json({"ok": True, "process": PROCESS_MANAGER.snapshot()})
 
+    def _post_sgi_key(self) -> None:
+        """POST /api/sgi/key"""
+        payload = self.read_json()
+        save_integration_key(str(payload.get("key") or ""))
+        # La llave no vuelve al navegador: solo se confirma que quedo guardada.
+        self.send_json({"ok": True, "sgi": sgi_status()})
+
+    def _post_sgi_sync(self) -> None:
+        """POST /api/sgi/sync"""
+        from marketplace_scheduler_worker import refresh_from_sgi, sgi_failure_code
+
+        try:
+            refresh_from_sgi(STORE)
+        except Exception as exc:
+            self.send_json(
+                {"code": sgi_failure_code(exc), "error": str(exc)[:500], "ok": False, "sgi": sgi_status()},
+                status=502,
+            )
+            return
+        self.send_json({"autonomy": autonomy_payload(), "ok": True, "sgi": sgi_status()})
+
+    def _post_sgi_drive_authorize(self) -> None:
+        """POST /api/sgi/drive/authorize"""
+        start_drive_authorization()
+        self.send_json(
+            {"message": "Se abrió el navegador para autorizar Google Drive en solo lectura.", "ok": True}
+        )
+
     # Mapa de rutas POST. Tenerlas en una tabla en vez de una cadena de ifs
     # permite enumerarlas: las pruebas comprueban que el frontend no llame a
     # ninguna ruta que no exista.
@@ -1181,6 +1198,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         "/api/open-session": _post_open_session,
         "/api/run/start": _post_run_start,
         "/api/run/stop": _post_run_stop,
+        "/api/sgi/key": _post_sgi_key,
+        "/api/sgi/sync": _post_sgi_sync,
+        "/api/sgi/drive/authorize": _post_sgi_drive_authorize,
     }
 
 

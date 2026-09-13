@@ -11,54 +11,44 @@ SCRATCH_DIR = Path(__file__).resolve().parent
 INVENTORY_PATH = SCRATCH_DIR / "ArticulosGenerados.xlsx"
 IMAGES_ROOT = SCRATCH_DIR / "imagenes_firupost"
 
+CLOTHING = "Men's clothing & shoes"
+SPORTS = "Sports & Outdoors"
+DEFAULT_CATEGORY = CLOTHING
+
+# Las familias se reconocen por el prefijo del SKU del SGI (MKT-GUI-001). Las
+# nueve primeras conservan su clave porque el historial de publicaciones y de
+# fotos usadas por cuenta cuelga de ella. Solo se usan categorias de Marketplace
+# ya probadas en el formulario; las familias de tecnologia (HUB, PAD, SOP)
+# quedan fuera hasta verificar su categoria.
 ASSISTANT_PRESETS: dict[str, dict[str, Any]] = {
-    "compression_short": {
-        "label": "Camisas manga corta de compresion",
-        "sku_prefixes": ["TS"],
-        "exclude_title_contains": ["sin mangas"],
-        "category": "Men's clothing & shoes",
-    },
-    "compression_sleeveless": {
-        "label": "Camisas sin mangas de compresion",
-        "title_contains": ["sin mangas"],
-        "category": "Men's clothing & shoes",
-    },
-    "leggins": {
-        "label": "Leggins de campana",
-        "title_contains": ["leggins"],
-        "category": "Men's clothing & shoes",
-    },
-    "enterizos": {
-        "label": "Enterizos de entrenamiento",
-        "title_contains": ["enterizo"],
-        "category": "Men's clothing & shoes",
-    },
-    "shorts": {
-        "label": "Shorts deportivos",
-        "title_contains": ["shorts"],
-        "category": "Men's clothing & shoes",
-    },
-    "bolsos": {
-        "label": "Bolsos deportivos",
-        "title_contains": ["bolsos"],
-        "category": "Sports & Outdoors",
-    },
-    "durags": {
-        "label": "Durags",
-        "title_contains": ["durags"],
-        "category": "Men's clothing & shoes",
-    },
-    "munequeras": {
-        "label": "Munequeras deportivas",
-        "title_contains": ["muñequeras", "munequeras"],
-        "category": "Sports & Outdoors",
-    },
-    "straps": {
-        "label": "Straps para gimnasio",
-        "title_contains": ["straps"],
-        "category": "Sports & Outdoors",
-    },
+    "compression_short": {"label": "Camisas manga corta de compresion", "sku_prefixes": ["CMP-"], "category": CLOTHING},
+    "compression_sleeveless": {"label": "Camisas sin mangas", "sku_prefixes": ["CSM-"], "category": CLOTHING},
+    "leggins": {"label": "Leggins deportivos", "sku_prefixes": ["LEG-"], "category": CLOTHING},
+    "enterizos": {"label": "Enterizos de entrenamiento", "sku_prefixes": ["ENT-"], "category": CLOTHING},
+    "shorts": {"label": "Shorts deportivos", "sku_prefixes": ["SHT-"], "category": CLOTHING},
+    "bolsos": {"label": "Bolsos deportivos", "sku_prefixes": ["BOL-"], "category": SPORTS},
+    "durags": {"label": "Durags", "sku_prefixes": ["DUR-"], "category": CLOTHING},
+    "munequeras": {"label": "Munequeras deportivas", "sku_prefixes": ["MUN-"], "category": SPORTS},
+    "straps": {"label": "Straps para gimnasio", "sku_prefixes": ["STR-"], "category": SPORTS},
+    "compression_long": {"label": "Camisas manga larga de compresion", "sku_prefixes": ["CML-"], "category": CLOTHING},
+    "bershka": {"label": "Camisas Bershka", "sku_prefixes": ["BSH-"], "category": CLOTHING},
+    "chalecos": {"label": "Chalecos de lana sin mangas", "sku_prefixes": ["CHA-"], "category": CLOTHING},
+    "tops": {"label": "Tops deportivos", "sku_prefixes": ["TOP-"], "category": CLOTHING},
+    "joggers": {"label": "Pantalones jogger", "sku_prefixes": ["JOG-"], "category": CLOTHING},
+    "calcetas": {"label": "Calcetas de compresion", "sku_prefixes": ["CAL-"], "category": CLOTHING},
+    "mochilas": {"label": "Mochilas antirrobo", "sku_prefixes": ["MOC-"], "category": SPORTS},
+    "rodilleras": {"label": "Rodilleras deportivas", "sku_prefixes": ["ROD-"], "category": SPORTS},
+    "cinturones": {"label": "Cinturones de gimnasio", "sku_prefixes": ["CIN-"], "category": SPORTS},
+    "mangas_brazo": {"label": "Mangas para brazo", "sku_prefixes": ["MAN-"], "category": SPORTS},
 }
+
+
+def category_for_sku(code: str) -> str:
+    value = str(code or "").upper()
+    for preset in ASSISTANT_PRESETS.values():
+        if any(value.startswith(str(prefix).upper()) for prefix in preset.get("sku_prefixes", [])):
+            return str(preset.get("category") or DEFAULT_CATEGORY)
+    return DEFAULT_CATEGORY
 
 STYLE_TO_MODE: dict[str, tuple[str, str | None]] = {
     "auto": ("grouped", None),

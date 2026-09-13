@@ -17,6 +17,15 @@ if str(SCRATCH_DIR) not in sys.path:
 from marketplace_storage import MarketplaceStore  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def sin_sgi_real(monkeypatch):
+    """Ninguna prueba llega al SGI real, aunque este equipo tenga direccion y llave
+    configuradas. Las pruebas de la puerta del SGI lo activan explicitamente."""
+    import marketplace_scheduler_worker as worker
+
+    monkeypatch.setattr(worker, "sgi_configured", lambda: False)
+
+
 @pytest.fixture()
 def store(tmp_path: Path) -> MarketplaceStore:
     return MarketplaceStore(tmp_path / "prueba.db")

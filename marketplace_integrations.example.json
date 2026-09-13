@@ -1,0 +1,12 @@
+{
+  "sgi": {
+    "base_url": "https://api-sgi.example.com"
+  },
+  "drive": {
+    "root_folder_ids": ["ID_DE_LA_CARPETA_DE_IMAGENES_DE_PRODUCTO"],
+    "excluded_folder_names": ["Flyers publicitarios"]
+  },
+  "sync": {
+    "max_drive_index_age_minutes": 60
+  }
+}
