@@ -1,6 +1,7 @@
 """Pruebas del almacen: cola, reintentos, publicaciones y fotos."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 
 from conftest import enqueue_job
@@ -137,7 +138,12 @@ def test_image_hash_usa_cache_y_se_invalida_al_cambiar_la_foto(store, photo, mon
     assert lecturas["n"] == 0, "la segunda consulta no debe releer el archivo"
 
     monkeypatch.undo()
-    imagen.write_bytes(b"contenido distinto")
+    # La clave de la cache es fecha + tamano. Un disco rapido puede reescribir el
+    # archivo sin que cambie la fecha, asi que la foto nueva tiene otro tamano y
+    # una fecha distinta explicita, como cuando de verdad se reemplaza una foto.
+    anterior = imagen.stat()
+    imagen.write_bytes(b"otra foto con contenido distinto")
+    os.utime(imagen, ns=(anterior.st_atime_ns, anterior.st_mtime_ns + 2_000_000_000))
     assert store.image_hash(imagen) != primero
 
 
