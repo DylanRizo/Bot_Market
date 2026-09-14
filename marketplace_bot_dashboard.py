@@ -50,6 +50,7 @@ from sgi_client import (
     load_settings as load_integration_settings,
     save_integration_key,
 )
+from sgi_sync import group_label
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
@@ -205,9 +206,13 @@ def autonomy_payload() -> dict[str, Any]:
         family["images"] = []
         for raw_path in family.get("image_options") or family.get("image_paths") or []:
             try:
-                family["images"].append(media_descriptor(Path(raw_path)))
+                descriptor = media_descriptor(Path(raw_path))
             except (ValueError, FileNotFoundError):
                 continue
+            # La carpeta es el color (CMP-BLA): la foto sirve para todas sus tallas.
+            descriptor["group"] = Path(raw_path).parent.name
+            descriptor["group_label"] = group_label(descriptor["group"])
+            family["images"].append(descriptor)
         family_options[family["key"]] = {image["id"] for image in family["images"]}
     custom_products = STORE.list_custom_products()
     for product in custom_products:

@@ -546,6 +546,9 @@
     .photo-account { border-top: 1px solid var(--border); padding-top: 9px; min-width: 0; }
     .photo-account > strong { display: block; margin-bottom: 7px; font-size: 12px; }
     .photo-picker { display: flex; flex-wrap: wrap; gap: 7px; }
+    .photo-color-group + .photo-color-group { margin-top: 10px; }
+    .photo-color-label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--text); }
+    .photo-color-label small { font-weight: 400; color: var(--muted); }
     .photo-choice { position: relative; width: 72px; height: 72px; margin: 0; cursor: pointer; }
     .photo-choice img { width: 72px; height: 72px; object-fit: contain; border: 2px solid transparent; border-radius: 5px; background: #f7f8fa; }
     .photo-choice input { position: absolute; top: 5px; left: 5px; width: 17px; height: 17px; margin: 0; accent-color: var(--blue); }

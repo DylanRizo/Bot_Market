@@ -17,6 +17,7 @@ from sgi_sync import (
     EXCEL_COLUMNS,
     build_mapping_from_workbook,
     cached_drive_files,
+    group_label,
     listing_title,
     revalidate_family,
     run_sync,
@@ -113,10 +114,11 @@ def test_genera_el_excel_y_las_carpetas_que_ya_consume_el_publicador(workspace):
     assert rows.loc["CMP-NEG-M", "Titulo"] == "Camisa de compresion manga corta - Negro, M"
     assert rows.loc["CMP-NEG-M", "Categoria"] == "Men's clothing & shoes"
 
-    # El resto del pipeline encuentra las fotos con su propia funcion.
-    negra = {"image_folder": "CMP-NEG-M", "image_name": rows.loc["CMP-NEG-M", "NombreImg"]}
+    # Las fotos quedan en la carpeta del color y el pipeline las encuentra.
+    assert rows.loc["CMP-NEG-M", "CarpetaImg"] == "CMP-NEG"
+    negra = {"image_folder": rows.loc["CMP-NEG-M", "CarpetaImg"], "image_name": rows.loc["CMP-NEG-M", "NombreImg"]}
     assert len(row_image_paths(negra, images)) == 2
-    azul = {"image_folder": "CMP-AZU-S", "image_name": rows.loc["CMP-AZU-S", "NombreImg"]}
+    azul = {"image_folder": rows.loc["CMP-AZU-S", "CarpetaImg"], "image_name": rows.loc["CMP-AZU-S", "NombreImg"]}
     assert row_image_paths(azul, images)[0].read_bytes() == b"foto local"
 
     # La carpeta del codigo anterior sigue intacta, y no quedan temporales.
@@ -128,12 +130,45 @@ def test_genera_el_excel_y_las_carpetas_que_ya_consume_el_publicador(workspace):
 
 def test_reemplaza_las_fotos_de_una_sincronizacion_anterior(workspace):
     images, cache, base = workspace
-    stale = images / "CMP-NEG-M"
+    stale = images / "CMP-NEG"
     stale.mkdir()
     (stale / "foto_9.jpg").write_bytes(b"vieja")
     groups, download = fake_drive(cache)
     run_sync([item("CMP-NEG-M")], groups, download, {}, images_root=images, inventory_path=base / "a.xlsx", report_path=base / "r.json")
     assert sorted(path.name for path in stale.iterdir()) == ["foto_1.jpg", "foto_2.jpg"]
+
+
+def test_todas_las_tallas_de_un_color_comparten_una_sola_carpeta(workspace):
+    images, cache, base = workspace
+    # Una sincronizacion anterior dejaba una copia por talla.
+    (images / "CMP-NEG-M").mkdir()
+    (images / "CMP-NEG-M" / "foto_1.jpg").write_bytes(b"copia por talla")
+    groups, download = fake_drive(cache)
+    report = run_sync(
+        [item("CMP-NEG-M"), item("CMP-NEG-L"), item("CMP-NEG-S")],
+        groups,
+        download,
+        {},
+        images_root=images,
+        inventory_path=base / "a.xlsx",
+        report_path=base / "r.json",
+    )
+
+    assert report["publishable"] == ["CMP-NEG-L", "CMP-NEG-M", "CMP-NEG-S"]
+    assert report["drive_photos"] == ["CMP-NEG-L", "CMP-NEG-M", "CMP-NEG-S"]
+    frame = pd.read_excel(base / "a.xlsx")
+    assert set(frame["CarpetaImg"]) == {"CMP-NEG"}
+    assert sorted(path.name for path in (images / "CMP-NEG").iterdir()) == ["foto_1.jpg", "foto_2.jpg"]
+    assert not (images / "CMP-NEG-M").exists()
+    assert (images / "TSBL-S" / "foto_1.jpg").is_file()
+
+
+@pytest.mark.parametrize(
+    "group, label",
+    [("CMP-BLA", "Blanco"), ("CSM-NEG", "Negro"), ("CAL-15BEI", "Beige 15-20 mmHg"), ("TSBK", "TSBK")],
+)
+def test_nombre_legible_del_color_de_las_fotos(group, label):
+    assert group_label(group) == label
 
 
 def test_lee_las_equivalencias_aunque_la_plantilla_traiga_un_titulo(tmp_path):

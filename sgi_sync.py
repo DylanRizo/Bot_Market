@@ -1,8 +1,9 @@
 """Sincroniza el catalogo del SGI y las fotos de Drive con el bot.
 
 Genera los mismos artefactos que el resto del pipeline ya consume:
-``ArticulosGenerados.xlsx`` y ``imagenes_firupost/<SKU>/foto_N.ext``. Asi el
-publicador, el calendario y la deduplicacion de fotos no cambian.
+``ArticulosGenerados.xlsx`` y ``imagenes_firupost/<FAMILIA-COLOR>/foto_N.ext``.
+Una foto de color sirve para todas las tallas, asi que se guarda una sola vez y
+cada talla del Excel apunta a la carpeta de su color.
 
 Reglas (decididas por el propietario):
 - solo productos activos con stock, con el precio del SGI;
@@ -101,6 +102,19 @@ def listing_title(item: CatalogItem) -> str:
     return f"{base} - {variant}" if variant else base
 
 
+def group_label(group: str) -> str:
+    """Nombre legible del color de un grupo de fotos: ``CMP-BLA`` -> ``Blanco``."""
+    parts = str(group or "").upper().split("-")
+    if len(parts) < 2 or parts[0] not in FAMILY_NAMES:
+        return str(group or "")
+    color_code = "-".join(parts[1:])
+    level = re.fullmatch(r"(\d+)([A-Z]+)", color_code)
+    if level:
+        color = COLOR_NAMES.get(level.group(2), level.group(2).capitalize())
+        return f"{color} {COMPRESSION_LEVELS.get(level.group(1), level.group(1))}"
+    return COLOR_NAMES.get(color_code, color_code.capitalize())
+
+
 def load_mapping(path: Path = MAPPING_PATH) -> dict[str, str]:
     if not path.is_file():
         return {}
@@ -175,6 +189,8 @@ def run_sync(
         "local_photos": [],
     }
     rows: list[dict[str, Any]] = []
+    staged: dict[str, list[str]] = {}
+    size_folders: set[str] = set()
     images_root.mkdir(parents=True, exist_ok=True)
     staging = images_root / STAGING_NAME
     if staging.exists():
@@ -183,6 +199,9 @@ def run_sync(
 
     try:
         for item in items:
+            group = product_group(item.code)
+            if group != item.code:
+                size_folders.add(item.code)
             if item.total_quantity <= 0:
                 continue
             if item.price_issue or item.unit_price is None:
@@ -192,23 +211,28 @@ def run_sync(
                 )
                 continue
 
-            sources: list[Path] = [download(photo) for photo in drive_groups.get(product_group(item.code), [])]
-            origin = "drive_photos" if sources else ""
             old_code = mapping.get(item.code)
-            if not sources and old_code:
-                sources = local_photos(old_code, images_root)
-                origin = "local_photos" if sources else ""
-            if not sources:
-                report["without_photos"].append({"code": item.code, "old_code": old_code})
-                continue
-
-            folder = staging / item.code
-            folder.mkdir()
-            names: list[str] = []
-            for index, source in enumerate(sources[:MAX_PHOTOS], start=1):
-                name = f"foto_{index}"
-                shutil.copy2(source, folder / f"{name}{source.suffix.lower()}")
-                names.append(name)
+            if group in staged:
+                # Otra talla del mismo color ya dejo sus fotos: se reutilizan.
+                names = staged[group]
+                origin = "drive_photos" if drive_groups.get(group) else "local_photos"
+            else:
+                sources: list[Path] = [download(photo) for photo in drive_groups.get(group, [])]
+                origin = "drive_photos" if sources else ""
+                if not sources and old_code:
+                    sources = local_photos(old_code, images_root)
+                    origin = "local_photos" if sources else ""
+                if not sources:
+                    report["without_photos"].append({"code": item.code, "old_code": old_code})
+                    continue
+                folder = staging / group
+                folder.mkdir()
+                names = []
+                for index, source in enumerate(sources[:MAX_PHOTOS], start=1):
+                    name = f"foto_{index}"
+                    shutil.copy2(source, folder / f"{name}{source.suffix.lower()}")
+                    names.append(name)
+                staged[group] = names
             rows.append(
                 {
                     "Titulo": listing_title(item),
@@ -219,7 +243,7 @@ def run_sync(
                     "Etiqueta": "",
                     "Sku": item.code,
                     "Ubicacion": DEFAULT_LOCATION,
-                    "CarpetaImg": item.code,
+                    "CarpetaImg": group,
                     "NombreImg": ";".join(names),
                 }
             )
@@ -233,6 +257,13 @@ def run_sync(
             if target.exists():
                 shutil.rmtree(target)
             folder.replace(target)
+        # Las sincronizaciones anteriores guardaban una copia por talla
+        # (CMP-BLA-L, CMP-BLA-M): ya no se usan. Las carpetas de codigos
+        # anteriores al SGI (TSBK-M) no son tallas del catalogo y no se tocan.
+        for code in sorted(size_folders - set(staged)):
+            leftover = images_root / code
+            if leftover.is_dir() and leftover.name != STAGING_NAME:
+                shutil.rmtree(leftover)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

@@ -92,12 +92,23 @@
         <h4>${escapeHtml(product.label)}</h4>
         <div class="photo-account-grid">${selectedAccounts.map(account => {
           const selected = new Set(autoPhotoDraft[account]?.[product.key] || []);
-          const choices = product.images.map((image, index) => `<label class="photo-choice" title="${escapeHtml(image.name)}">
-            <img src="${escapeHtml(image.url)}" alt="${escapeHtml(product.label)} - foto ${index + 1}">
-            <input type="checkbox" data-auto-photo-account="${escapeHtml(account)}" data-auto-photo-family="${escapeHtml(product.key)}" value="${escapeHtml(image.id)}" ${selected.has(image.id) ? "checked" : ""}>
-          </label>`).join("");
+          // Una foto de color sirve para todas las tallas: se agrupan por color.
+          const groups = [];
+          product.images.forEach((image, index) => {
+            const key = image.group || "";
+            let bucket = groups.find(group => group.key === key);
+            if (!bucket) groups.push(bucket = { key, label: image.group_label || "", items: [] });
+            bucket.items.push({ image, index });
+          });
+          const choices = groups.map(group => `<div class="photo-color-group">
+            ${group.label ? `<span class="photo-color-label">${escapeHtml(group.label)} <small>sirve para todas las tallas</small></span>` : ""}
+            <div class="photo-picker">${group.items.map(({ image, index }) => `<label class="photo-choice" title="${escapeHtml(image.name)}">
+              <img src="${escapeHtml(image.url)}" alt="${escapeHtml(product.label)} - foto ${index + 1}">
+              <input type="checkbox" data-auto-photo-account="${escapeHtml(account)}" data-auto-photo-family="${escapeHtml(product.key)}" value="${escapeHtml(image.id)}" ${selected.has(image.id) ? "checked" : ""}>
+            </label>`).join("")}</div>
+          </div>`).join("");
           return `<div class="photo-account"><strong>${escapeHtml(accounts[account]?.display_name || account)}</strong>
-            <div class="photo-picker">${choices || '<span class="muted">Sin fotos disponibles</span>'}</div>
+            ${choices || '<span class="muted">Sin fotos disponibles</span>'}
             <span class="photo-count">${selected.size} fotos seleccionadas</span>
           </div>`;
         }).join("")}</div>
