@@ -200,13 +200,15 @@ def stop_worker() -> bool:
 def autonomy_payload() -> dict[str, Any]:
     config = load_autonomy_config(STORE)
     families = catalog_families()
+    family_options: dict[str, set[str]] = {}
     for family in families:
         family["images"] = []
-        for raw_path in family.get("image_paths") or []:
+        for raw_path in family.get("image_options") or family.get("image_paths") or []:
             try:
                 family["images"].append(media_descriptor(Path(raw_path)))
             except (ValueError, FileNotFoundError):
                 continue
+        family_options[family["key"]] = {image["id"] for image in family["images"]}
     custom_products = STORE.list_custom_products()
     for product in custom_products:
         product["images"] = []
@@ -222,9 +224,14 @@ def autonomy_payload() -> dict[str, Any]:
             descriptors = []
             for raw_path in paths:
                 try:
-                    descriptors.append(media_descriptor(Path(raw_path)))
+                    descriptor = media_descriptor(Path(raw_path))
                 except (ValueError, FileNotFoundError):
                     continue
+                # Una seleccion guardada con fotos que ya no son de la familia (por
+                # ejemplo las carpetas anteriores al SGI) no debe aparecer como vigente.
+                if family in family_options and descriptor["id"] not in family_options[family]:
+                    continue
+                descriptors.append(descriptor)
             if descriptors:
                 photo_assignments[account][family] = descriptors
     return {

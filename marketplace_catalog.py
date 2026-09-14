@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -123,6 +124,49 @@ def row_has_image(row: dict[str, Any], images_root: Path = IMAGES_ROOT) -> bool:
     return bool(row_image_paths(row, images_root))
 
 
+MAX_FAMILY_IMAGE_OPTIONS = 60
+_content_hashes: dict[tuple[str, int, int], str] = {}
+
+
+def image_content_hash(path: Path) -> str:
+    """Huella del contenido, recordada mientras el archivo no cambie."""
+    stats = path.stat()
+    key = (str(path), stats.st_mtime_ns, stats.st_size)
+    if key not in _content_hashes:
+        _content_hashes[key] = hashlib.md5(path.read_bytes()).hexdigest()
+    return _content_hashes[key]
+
+
+def family_image_options(rows: list[dict[str, Any]], images_root: Path = IMAGES_ROOT) -> list[str]:
+    """Fotos distintas de una familia, alternando colores.
+
+    Cada talla tiene su propia copia de las mismas fotos, asi que se descartan
+    por contenido. Se alterna entre colores (``CMP-BLA``, ``CMP-GRI``,
+    ``CMP-NEG``) para que las primeras fotos no sean todas del mismo color.
+    """
+    by_color: dict[str, list[str]] = {}
+    seen: set[str] = set()
+    for row in rows:
+        color = "-".join(str(row.get("sku") or "").upper().split("-")[:2]) or str(row.get("sku") or "")
+        for image in row_image_paths(row, images_root):
+            try:
+                digest = image_content_hash(image)
+            except OSError:
+                continue
+            if digest in seen:
+                continue
+            seen.add(digest)
+            by_color.setdefault(color, []).append(str(image))
+    ordered: list[str] = []
+    queues = [list(images) for images in by_color.values()]
+    while queues and len(ordered) < MAX_FAMILY_IMAGE_OPTIONS:
+        for queue in queues:
+            if queue:
+                ordered.append(queue.pop(0))
+        queues = [queue for queue in queues if queue]
+    return ordered[:MAX_FAMILY_IMAGE_OPTIONS]
+
+
 def catalog_families(
     selected: list[str] | None = None,
     inventory_path: Path = INVENTORY_PATH,
@@ -137,11 +181,7 @@ def catalog_families(
             continue
         matches = [row for row in rows if preset_matches_row(preset, row)]
         valid = [row for row in matches if row_has_image(row, images_root)]
-        family_images: list[str] = []
-        for row in valid:
-            for image in row_image_paths(row, images_root):
-                if str(image) not in family_images:
-                    family_images.append(str(image))
+        family_images = family_image_options(valid, images_root)
         prices = [float(row["price"]) for row in valid if isinstance(row.get("price"), (int, float)) and float(row["price"]) > 0]
         result.append(
             {
@@ -153,6 +193,7 @@ def catalog_families(
                 "price_from": min(prices) if prices else None,
                 "eligible": bool(valid and prices),
                 "reason": "" if valid and prices else "Sin variantes con precio y foto validos.",
+                "image_options": family_images,
                 "image_paths": family_images[:10],
             }
         )

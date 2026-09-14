@@ -29,6 +29,25 @@ def base_config(**overrides):
 AHORA = datetime(2026, 9, 7, 6, 0, 0)   # lunes
 
 
+def test_una_seleccion_de_fotos_anterior_al_sgi_no_llega_al_anuncio(tmp_path):
+    vieja = tmp_path / "TSBK-M" / "foto_1.jpg"
+    nueva = tmp_path / "CMP-NEG-L" / "foto_3.jpg"
+    for foto in (vieja, nueva):
+        foto.parent.mkdir()
+        foto.write_bytes(foto.parent.name.encode())
+    job = {
+        "family_key": "compression_short",
+        "sku_prefixes": ["CMP-"],
+        "listing_overrides": {"image_paths": ["por-defecto.jpg"]},
+    }
+
+    solo_vieja = {"account_media": {"cuenta1": {"compression_short": [str(vieja)]}}}
+    assert scheduler.job_for_account(job, "cuenta1", solo_vieja)["listing_overrides"]["image_paths"] == ["por-defecto.jpg"]
+
+    mezcla = {"account_media": {"cuenta1": {"compression_short": [str(vieja), str(nueva)]}}}
+    assert scheduler.job_for_account(job, "cuenta1", mezcla)["listing_overrides"]["image_paths"] == [str(nueva)]
+
+
 def test_build_slots_respeta_dias_activos():
     config = base_config(active_days=[0], horizon_days=7)
     slots = build_slots(config, start_date=AHORA.date(), now=AHORA)

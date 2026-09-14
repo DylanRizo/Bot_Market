@@ -180,7 +180,14 @@ def job_for_account(job: dict[str, Any], account: str, config: dict[str, Any]) -
     account_job = dict(job)
     account_job["account"] = account
     family = str(job.get("family_key") or "")
-    assigned = (config.get("account_media") or {}).get(account, {}).get(family)
+    assigned = list((config.get("account_media") or {}).get(account, {}).get(family) or [])
+    prefixes = tuple(str(prefix).upper() for prefix in job.get("sku_prefixes") or [])
+    if prefixes:
+        # Una seleccion guardada antes del SGI apunta a carpetas con codigos
+        # viejos (TSBK-M): esas fotos ya no son de la familia y no se publican.
+        assigned = [
+            path for path in assigned if Path(path).parent.name.upper().startswith(prefixes) and Path(path).is_file()
+        ]
     if assigned:
         overrides = dict(job.get("listing_overrides") or {})
         overrides["image_paths"] = list(assigned[:10])
