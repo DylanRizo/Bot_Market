@@ -31,7 +31,8 @@ def test_el_grupo_ignora_la_talla(code, group):
     ],
 )
 def test_acepta_fotografias_de_producto(name):
-    assert parse_photo(drive_file(name)) is not None
+    photo = parse_photo(drive_file(name))
+    assert photo is not None and photo.promotional is False
 
 
 @pytest.mark.parametrize(
@@ -40,6 +41,26 @@ def test_acepta_fotografias_de_producto(name):
         "CMP-NEG - Publicidad camisa de compresion manga corta negra - 001.jpg",
         "CMP-NEG - Infografia camisa de compresion manga corta negra - 001.JPG",
         "CMP-NEG - Infografía camisa de compresion - 001.JPG",
+        "CMP-BLA - Flyer camisa blanca - 002.png",
+    ],
+)
+def test_acepta_flyers_publicidad_e_infografias_como_promocionales(name):
+    photo = parse_photo(drive_file(name))
+    assert photo is not None and photo.promotional is True
+
+
+def test_la_publicidad_va_despues_de_las_fotos_del_producto():
+    files = [
+        drive_file("CMP-NEG - Publicidad camisa negra - 001.jpg", md5="p"),
+        drive_file("CMP-NEG - Camisa negra - 002.JPG", md5="b"),
+        drive_file("CMP-NEG - Camisa negra - 001.JPG", md5="a"),
+    ]
+    assert [photo.md5 for photo in group_photos(files)["CMP-NEG"]] == ["a", "b", "p"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
         "BSH-VAR - Inventario camisas Bershka surtidas - 003.HEIC",
         "CAL-15-VAR - Empaque calcetas de compresion 15-20 mmHg - 001.JPG",
         "MKT-MUL - Publicidad descuentos de temporada multiproducto - 001.jpg",
@@ -115,10 +136,10 @@ def folder(name: str, folder_id: str) -> dict:
     return {"id": folder_id, "name": name, "mimeType": "application/vnd.google-apps.folder"}
 
 
-def test_recorre_subcarpetas_y_paginas_y_salta_los_flyers():
-    service = FakeService(
+def arbol_con_flyers() -> FakeService:
+    return FakeService(
         {
-            "raizImagenes01": [
+            "raizPublicidad1": [
                 [folder("Camisas de compresión ", "carpetaCamisas1"), folder("Flyers publicitarios ", "carpetaFlyers01")],
                 [drive_file("CMP-NEG - Camisa negra - 003.JPG")],
             ],
@@ -126,8 +147,22 @@ def test_recorre_subcarpetas_y_paginas_y_salta_los_flyers():
             "carpetaFlyers01": [[drive_file("CMP-NEG - Publicidad camisa - 001.jpg")]],
         }
     )
-    files = DriveLibrary(service).list_image_files(["raizImagenes01"])
-    assert sorted(file["name"] for file in files) == ["CMP-NEG - Camisa negra - 001.JPG", "CMP-NEG - Camisa negra - 003.JPG"]
+
+
+def test_recorre_todas_las_subcarpetas_y_paginas_incluidos_los_flyers():
+    service = arbol_con_flyers()
+    files = DriveLibrary(service).list_image_files(["raizPublicidad1"])
+    assert sorted(file["name"] for file in files) == [
+        "CMP-NEG - Camisa negra - 001.JPG",
+        "CMP-NEG - Camisa negra - 003.JPG",
+        "CMP-NEG - Publicidad camisa - 001.jpg",
+    ]
+
+
+def test_una_carpeta_excluida_en_la_configuracion_no_se_consulta():
+    service = arbol_con_flyers()
+    files = DriveLibrary(service).list_image_files(["raizPublicidad1"], ["Flyers publicitarios"])
+    assert "CMP-NEG - Publicidad camisa - 001.jpg" not in [file["name"] for file in files]
     assert "carpetaFlyers01" not in service.files().queried
 
 
@@ -142,6 +177,45 @@ def test_una_foto_ya_descargada_no_se_vuelve_a_pedir(tmp_path):
     cached = tmp_path / "abc.jpg"
     cached.write_bytes(b"foto")
     assert DriveLibrary(FakeService({}), cache_dir=tmp_path).download(photo) == cached
+
+
+def test_el_panel_recibe_el_enlace_de_google_sin_abrir_navegador(tmp_path, monkeypatch):
+    """El panel corre oculto: el enlace se entrega en vez de abrir un navegador."""
+    import webbrowser
+
+    import google_auth_oauthlib.flow
+    import googleapiclient.discovery
+
+    llamadas = {}
+
+    class Credenciales:
+        valid = True
+
+        def to_json(self):
+            return '{"token": "falso"}'
+
+    class Flujo:
+        def run_local_server(self, port, browser=None, timeout_seconds=None, **kwargs):
+            llamadas.update(port=port, timeout=timeout_seconds)
+            webbrowser.get(browser).open("https://accounts.google.com/o/oauth2/auth?state=prueba")
+            return Credenciales()
+
+    monkeypatch.setattr(google_auth_oauthlib.flow.InstalledAppFlow, "from_client_secrets_file", classmethod(lambda cls, *a, **k: Flujo()))
+    monkeypatch.setattr(googleapiclient.discovery, "build", lambda *a, **k: object())
+    monkeypatch.setattr(webbrowser, "open", lambda *a, **k: pytest.fail("no debe abrir el navegador del sistema"))
+
+    enlaces = []
+    DriveLibrary.connect(
+        tmp_path / "credenciales.json",
+        tmp_path / "token.json",
+        interactive=True,
+        cache_dir=tmp_path,
+        open_url=enlaces.append,
+        timeout_seconds=300,
+    )
+    assert enlaces == ["https://accounts.google.com/o/oauth2/auth?state=prueba"]
+    assert llamadas == {"port": 0, "timeout": 300}
+    assert (tmp_path / "token.json").read_text(encoding="utf-8") == '{"token": "falso"}'
 
 
 def test_convierte_heic_a_jpeg():

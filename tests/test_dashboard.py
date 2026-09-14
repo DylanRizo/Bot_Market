@@ -25,6 +25,10 @@ def panel(tmp_path_factory):
     os.environ["MARKETPLACE_BOT_DB"] = str(temporal / "panel.db")
     import marketplace_bot_dashboard as dashboard
 
+    # El token se escribe en un archivo: sin esto las pruebas reemplazan el del
+    # panel real que la persona tiene abierto y la dejan fuera.
+    ruta_token_real = dashboard.DASHBOARD_TOKEN_PATH
+    dashboard.DASHBOARD_TOKEN_PATH = temporal / "token.txt"
     token = dashboard.issue_session_token()
     servidor = ThreadingHTTPServer(("127.0.0.1", 0), dashboard.DashboardHandler)
     hilo = threading.Thread(target=servidor.serve_forever, daemon=True)
@@ -35,7 +39,13 @@ def panel(tmp_path_factory):
     finally:
         servidor.shutdown()
         servidor.server_close()
+        dashboard.DASHBOARD_TOKEN_PATH = ruta_token_real
         os.environ.pop("MARKETPLACE_BOT_DB", None)
+
+
+def test_las_pruebas_no_tocan_el_token_del_panel_real(panel):
+    _, _, dashboard = panel
+    assert dashboard.DASHBOARD_TOKEN_PATH.parent != SCRATCH_DIR
 
 
 def pedir(base, ruta, metodo="GET", headers=None, datos=None):
@@ -62,6 +72,20 @@ def test_sin_token_todo_responde_401(panel):
 def test_token_invalido_no_sirve(panel):
     base, _, _ = panel
     estado, _, _ = pedir(base, "/api/state", headers={"Cookie": "mb_session=inventado"})
+    assert estado == 401
+
+
+def test_el_enlace_vigente_entra_aunque_quede_una_cookie_vieja(panel):
+    """Tras reiniciar el panel, el navegador conserva la cookie de la sesion anterior."""
+    base, token, _ = panel
+    estado, _, cabeceras = pedir(base, f"/?token={token}", headers={"Cookie": "mb_session=de-un-panel-anterior"})
+    assert estado == 200
+    assert f"mb_session={token}" in cabeceras.get("Set-Cookie", "")
+
+
+def test_una_cookie_con_caracteres_raros_no_rompe_el_panel(panel):
+    base, _, _ = panel
+    estado, _, _ = pedir(base, "/api/state", headers={"Cookie": "mb_session=ñandú"})
     assert estado == 401
 
 
@@ -254,6 +278,59 @@ def test_sincronizar_con_la_llave_revocada_informa_el_codigo(sgi_aislado, monkey
     assert estado == 502
     respuesta = json.loads(cuerpo)
     assert respuesta["ok"] is False and respuesta["code"] == "SGI_KEY_REJECTED"
+
+
+@pytest.fixture()
+def drive_simulado(sgi_aislado, monkeypatch):
+    """Sustituye el consentimiento de Google: nada abre navegadores ni toca la red."""
+    import drive_photos
+
+    base, cabeceras, dashboard, _ = sgi_aislado
+    monkeypatch.setattr(dashboard, "_drive_authorization", {"error": "", "running": False, "url": ""})
+    liberar = threading.Event()
+
+    def conectar(comportamiento):
+        def connect(*args, open_url=None, timeout_seconds=None, **kwargs):
+            comportamiento(open_url, timeout_seconds)
+            liberar.wait(5)
+
+        monkeypatch.setattr(drive_photos.DriveLibrary, "connect", staticmethod(connect))
+
+    yield base, cabeceras, dashboard, conectar
+    liberar.set()
+
+
+def test_autorizar_drive_devuelve_el_enlace_de_google(drive_simulado):
+    base, cabeceras, dashboard, conectar = drive_simulado
+    recibido = {}
+
+    def entregar_enlace(open_url, timeout_seconds):
+        recibido["timeout"] = timeout_seconds
+        open_url("https://accounts.google.com/o/oauth2/auth?state=prueba")
+
+    conectar(entregar_enlace)
+    estado, cuerpo, _ = pedir(base, "/api/sgi/drive/authorize", "POST", cabeceras, b"{}")
+    assert estado == 200
+    assert json.loads(cuerpo)["url"].startswith("https://accounts.google.com/")
+    assert recibido["timeout"] == dashboard.DRIVE_AUTHORIZATION_TIMEOUT_SECONDS
+
+    # Pulsar otra vez mientras espera a Google devuelve el mismo enlace, sin otro flujo.
+    estado, cuerpo, _ = pedir(base, "/api/sgi/drive/authorize", "POST", cabeceras, b"{}")
+    assert estado == 200
+    assert json.loads(cuerpo)["url"].startswith("https://accounts.google.com/")
+
+
+def test_autorizar_drive_informa_si_no_se_pudo_preparar(drive_simulado):
+    base, cabeceras, _, conectar = drive_simulado
+
+    def fallar(open_url, timeout_seconds):
+        raise FileNotFoundError("Falta credenciales_google.json")
+
+    conectar(fallar)
+    estado, cuerpo, _ = pedir(base, "/api/sgi/drive/authorize", "POST", cabeceras, b"{}")
+    assert estado == 502
+    respuesta = json.loads(cuerpo)
+    assert respuesta["ok"] is False and "credenciales_google.json" in respuesta["error"]
 
 
 def test_sincronizar_devuelve_el_reporte(sgi_aislado, monkeypatch):

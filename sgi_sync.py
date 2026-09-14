@@ -311,7 +311,8 @@ def sync_from_local_configuration(*, refresh_drive: bool = False, authorize_driv
     catalog = SgiClient.from_local_configuration().catalog()
     library = DriveLibrary.connect(interactive=authorize_drive)
     roots = [str(folder) for folder in drive_settings.get("root_folder_ids") or []]
-    excluded = drive_settings.get("excluded_folder_names") or list(DEFAULT_EXCLUDED_FOLDERS)
+    # Una lista vacia es una decision explicita: buscar tambien en esas carpetas.
+    excluded = drive_settings.get("excluded_folder_names", list(DEFAULT_EXCLUDED_FOLDERS))
     max_age = 0 if refresh_drive else float((settings.get("sync") or {}).get("max_drive_index_age_minutes", 60)) * 60
     files = cached_drive_files(lambda: library.list_image_files(roots, excluded), max_age_seconds=max_age)
     return run_sync(catalog, group_photos(files), library.download, load_mapping(), categories=category_for_sku)

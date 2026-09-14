@@ -175,31 +175,80 @@
             <div id="sgiLists"></div>
           </div>
 
-          <div class="assistant-section">
-            <div class="section-heading"><div><span class="step-label">Reglas</span><h3>Cuándo debe trabajar</h3></div></div>
-            <div class="schedule-grid">
-              <div><label>Modo</label><select id="autoMode">
-                <option value="simulation">Simulación</option>
-                <option value="dry_run">Prueba sin publicar</option>
-                <option value="supervised">Supervisado</option>
-                <option value="semiautomatic">Calendario aprobado</option>
-                <option value="autonomous">Autónomo</option>
-              </select></div>
-              <div><label>Uso de cuentas</label><select id="autoAccountStrategy">
-                <option value="round_robin">Rotar entre cuentas</option>
-                <option value="all_accounts">Publicar en todas</option>
-              </select></div>
-              <div><label>Desde</label><input id="autoStart" type="time"></div>
-              <div><label>Hasta</label><input id="autoEnd" type="time"></div>
-              <div><label>Máximo diario</label><input id="autoMaxDaily" type="number" min="1" max="20"></div>
-              <div><label>Intervalo (minutos)</label><input id="autoInterval" type="number" min="30" step="15"></div>
-              <div><label>Días antes de repetir</label><input id="autoCooldown" type="number" min="0" max="30"></div>
-              <div><label title="Mueve cada publicación unos minutos al azar para que el horario no sea siempre idéntico.">Variación del horario (min)</label><input id="autoJitter" type="number" min="0" max="30"></div>
+          <div class="assistant-section" id="autoRulesSection">
+            <div class="section-heading">
+              <div><span class="step-label">Reglas</span><h3>Cuándo y cómo publica</h3></div>
+              <div class="toolbar">
+                <span id="autoRulesState" class="rules-state" hidden>Cambios sin guardar</span>
+                <button id="autoRulesSaveBtn" class="primary">Guardar reglas</button>
+              </div>
             </div>
-            <label>Cuentas activas</label>
-            <div id="autoAccounts" class="weekday-row"></div>
-            <label>Días activos</label>
-            <div id="autoDays" class="weekday-row"></div>
+            <div class="rules-grid">
+              <fieldset class="rules-card">
+                <legend>1. Cómo publica</legend>
+                <div class="field">
+                  <label for="autoMode">Nivel de autonomía</label>
+                  <select id="autoMode">
+                    <option value="simulation">Simulación</option>
+                    <option value="dry_run">Prueba sin publicar</option>
+                    <option value="supervised">Supervisado</option>
+                    <option value="semiautomatic">Calendario aprobado</option>
+                    <option value="autonomous">Autónomo</option>
+                  </select>
+                  <small id="autoModeHelp" class="field-help"></small>
+                </div>
+                <div class="field">
+                  <label for="autoAccountStrategy">Reparto entre cuentas</label>
+                  <select id="autoAccountStrategy">
+                    <option value="round_robin">Rotar entre cuentas</option>
+                    <option value="all_accounts">Publicar en todas</option>
+                  </select>
+                  <small id="autoStrategyHelp" class="field-help"></small>
+                </div>
+              </fieldset>
+
+              <fieldset class="rules-card">
+                <legend>2. Cuentas que publican</legend>
+                <div id="autoAccounts" class="choice-row" role="group" aria-label="Cuentas que publican"></div>
+                <small class="field-help">Marca todas las cuentas que pueden publicar. Una foto ya usada en una cuenta sí puede usarse en otra.</small>
+              </fieldset>
+
+              <fieldset class="rules-card">
+                <legend>3. Días y horario</legend>
+                <div class="field">
+                  <span class="field-label">Días en que publica</span>
+                  <div id="autoDays" class="choice-row" role="group" aria-label="Días en que publica"></div>
+                </div>
+                <div class="field-pair">
+                  <div class="field"><label for="autoStart">Desde</label><input id="autoStart" type="time"></div>
+                  <div class="field"><label for="autoEnd">Hasta</label><input id="autoEnd" type="time"></div>
+                </div>
+              </fieldset>
+
+              <fieldset class="rules-card">
+                <legend>4. Frecuencia</legend>
+                <div class="field-pair">
+                  <div class="field">
+                    <label for="autoMaxDaily">Máximo por día</label>
+                    <div class="input-unit"><input id="autoMaxDaily" type="number" min="1" max="20"><span>publicaciones</span></div>
+                  </div>
+                  <div class="field">
+                    <label for="autoInterval">Separación mínima</label>
+                    <div class="input-unit"><input id="autoInterval" type="number" min="30" step="15"><span>minutos</span></div>
+                  </div>
+                  <div class="field">
+                    <label for="autoCooldown">Esperar antes de repetir un producto</label>
+                    <div class="input-unit"><input id="autoCooldown" type="number" min="0" max="30"><span>días</span></div>
+                  </div>
+                  <div class="field">
+                    <label for="autoJitter">Variación del horario</label>
+                    <div class="input-unit"><input id="autoJitter" type="number" min="0" max="30"><span>± minutos</span></div>
+                  </div>
+                </div>
+                <small class="field-help">La variación mueve cada hora unos minutos para que el patrón no sea siempre idéntico.</small>
+              </fieldset>
+            </div>
+            <div id="autoRulesSummary" class="rules-summary" aria-live="polite"></div>
           </div>
 
           <div class="assistant-section">
@@ -243,6 +292,7 @@
                 <button id="autoApproveBtn">Aprobar pendientes</button>
               </div>
             </div>
+            <p id="autoGenerateNote" class="generate-note" hidden></p>
             <div id="autonomyCalendar" class="calendar-week"></div>
           </div>
 

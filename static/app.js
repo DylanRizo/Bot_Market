@@ -4,6 +4,8 @@
     let autoPhotoDraft = {};
     let autoPhotoDraftDirty = false;
     let dirty = false;
+    // Mientras la persona edita las reglas, el refresco periodico no debe pisarlas.
+    let autonomyFormDirty = false;
     const $ = (id) => document.getElementById(id);
 
     function escapeHtml(value) {
@@ -158,11 +160,60 @@
       }).join("");
     }
 
-    function renderAutonomy() {
-      const autonomy = state.autonomy || {};
-      const config = autonomy.config || {};
-      const accounts = state.accounts.accounts || {};
-      $("autoEnabled").checked = Boolean(config.enabled);
+    function readRulesForm() {
+      const minutes = value => {
+        const [hours, mins] = String(value || "").split(":").map(Number);
+        return Number.isFinite(hours) ? hours * 60 + (mins || 0) : NaN;
+      };
+      return {
+        accounts: $("autoAccounts").querySelectorAll("input:checked").length,
+        days: $("autoDays").querySelectorAll("input:checked").length,
+        window: minutes($("autoEnd").value) - minutes($("autoStart").value),
+        maxDaily: Number($("autoMaxDaily").value || 0),
+        interval: Number($("autoInterval").value || 0),
+        strategy: $("autoAccountStrategy").value,
+      };
+    }
+
+    function renderRulesSummary() {
+      $("autoRulesState").hidden = !autonomyFormDirty;
+      const rules = readRulesForm();
+      if (!rules.accounts || !rules.days || !(rules.window > 0) || rules.interval <= 0 || rules.maxDaily <= 0) {
+        $("autoRulesSummary").innerHTML = `<p><strong>Faltan datos:</strong> marca al menos una cuenta y un día, y usa una hora final posterior a la inicial.</p>`;
+        return;
+      }
+      const perDay = Math.min(rules.maxDaily, Math.floor(rules.window / rules.interval) + 1);
+      const slots = perDay * rules.days;
+      const wanted = slots * (rules.strategy === "all_accounts" ? rules.accounts : 1);
+      const products = (state.autonomy?.families || []).filter(family => family.eligible).length;
+      const catalogLimit = products * rules.accounts;
+      const lines = [
+        `<p><strong>${slots} espacios por semana:</strong> hasta ${perDay} por día durante ${rules.days} ${rules.days === 1 ? "día" : "días"}, entre ${escapeHtml($("autoStart").value)} y ${escapeHtml($("autoEnd").value)}.</p>`,
+      ];
+      if (catalogLimit < wanted) {
+        lines.push(`<p>Con ${products} ${products === 1 ? "producto disponible" : "productos disponibles"} y ${rules.accounts} ${rules.accounts === 1 ? "cuenta" : "cuentas"} se llenarán unos ${catalogLimit}: el bot no vuelve a usar en una cuenta fotos que ya programó o publicó ahí.</p>`);
+      }
+      $("autoRulesSummary").innerHTML = lines.join("");
+    }
+
+    const MODE_HELP = {
+      simulation: "Arma y valida el calendario sin abrir Facebook. No publica nada.",
+      dry_run: "Abre Facebook y rellena cada anuncio, pero se detiene antes de publicar.",
+      supervised: "Pide aprobar cada publicación y la ejecuta en modo prueba: rellena el anuncio sin publicarlo.",
+      semiautomatic: "Publica de verdad, pero solo lo que apruebes en el calendario.",
+      autonomous: "Genera, aprueba y publica solo. Úsalo cuando las pruebas ya salgan bien.",
+    };
+    const STRATEGY_HELP = {
+      round_robin: "Cada espacio del calendario usa una cuenta, por turnos.",
+      all_accounts: "Cada espacio publica el mismo producto en todas las cuentas marcadas, con 7 minutos de diferencia.",
+    };
+
+    function renderRulesHelp() {
+      $("autoModeHelp").textContent = MODE_HELP[$("autoMode").value] || "";
+      $("autoStrategyHelp").textContent = STRATEGY_HELP[$("autoAccountStrategy").value] || "";
+    }
+
+    function renderAutonomyForm(autonomy, config, accounts) {
       $("autoMode").value = config.mode || "supervised";
       $("autoAccountStrategy").value = config.account_strategy || "round_robin";
       const selectedAccounts = new Set(config.accounts || [config.account]);
@@ -188,6 +239,16 @@
         <input type="checkbox" value="${escapeHtml(family.key)}" ${selectedFamilies.has(family.key) ? "checked" : ""} ${family.eligible ? "" : "disabled"}>
         ${escapeHtml(family.label)} <span class="muted">${family.valid_variant_count}/${family.variant_count}</span>
       </label>`).join("");
+    }
+
+    function renderAutonomy() {
+      const autonomy = state.autonomy || {};
+      const config = autonomy.config || {};
+      const accounts = state.accounts.accounts || {};
+      $("autoEnabled").checked = Boolean(config.enabled);
+      if (!autonomyFormDirty) renderAutonomyForm(autonomy, config, accounts);
+      renderRulesHelp();
+      renderRulesSummary();
 
       const counts = autonomy.summary?.counts || {};
       $("autoPublishedToday").textContent = autonomy.summary?.published_today || 0;
@@ -262,7 +323,13 @@
 
     async function authorizeDrive() {
       const result = await api("/api/sgi/drive/authorize", { method: "POST", body: "{}" });
-      toast(result.message);
+      const opened = window.open(result.url, "_blank", "noopener");
+      // Si el navegador bloquea la ventana, queda un enlace para abrirla a mano.
+      $("sgiLists").insertAdjacentHTML(
+        "afterbegin",
+        `<p class="muted">Autoriza Google Drive en la pestaña de Google y luego pulsa Actualizar. <a href="${escapeHtml(result.url)}" target="_blank" rel="noopener">Abrir la autorización de Google</a></p>`,
+      );
+      toast(opened ? "Se abrió Google para autorizar Drive en solo lectura." : "Pulsa el enlace para autorizar Google Drive.");
     }
 
     function renderAutonomyCalendar() {
@@ -422,6 +489,7 @@
       if (!$("autoAccounts").querySelector("input:checked")) throw new Error("Selecciona al menos una cuenta.");
       const result = await api("/api/autonomy/config", { method: "POST", body: JSON.stringify({ config: collectAutonomyConfig() }) });
       state.autonomy = result.autonomy;
+      autonomyFormDirty = false;
       resetAutoPhotoDraft();
       renderAutonomy();
       toast("Reglas automáticas guardadas");
@@ -434,7 +502,14 @@
       const result = await api("/api/autonomy/generate", { method: "POST", body: JSON.stringify({ replace }) });
       state.autonomy = result.autonomy;
       renderAutonomy();
-      toast(`${result.result.created} publicaciones agregadas al calendario`);
+      const { created, available_slots: available, skipped_slots: skipped, families } = result.result;
+      const note = $("autoGenerateNote");
+      note.hidden = false;
+      note.classList.toggle("warning", skipped > 0);
+      note.innerHTML = skipped > 0
+        ? `<strong>Se agregaron ${created} publicaciones y ${skipped} de ${available} espacios quedaron vacíos.</strong> Solo hay ${families} ${families === 1 ? "producto" : "productos"} con fotos que todavía no se usaron en esas cuentas. Para llenar más días, marca otra cuenta, sube a Drive fotos de más productos con stock o vuelve a sincronizar cuando haya más inventario.`
+        : `<strong>Se agregaron ${created} publicaciones</strong> en los ${available} espacios de la semana.`;
+      toast(`${created} publicaciones agregadas al calendario`);
     }
 
     async function approveAutonomyWeek() {
@@ -992,6 +1067,7 @@
       const [baseState, autonomyState] = await Promise.all([api("/api/state"), api("/api/autonomy")]);
       state = baseState;
       state.autonomy = autonomyState.autonomy;
+      autonomyFormDirty = false;
       resetAutoPhotoDraft();
       renderAll();
       setDirty(false);
@@ -1171,6 +1247,16 @@
     $("saveBtn").onclick = saveConfig;
     $("autoSaveBtn").onclick = saveAutonomy;
     $("autoGenerateBtn").onclick = generateAutonomyWeek;
+    const markRulesDirty = () => {
+      autonomyFormDirty = true;
+      setDirty();
+      renderRulesHelp();
+      renderRulesSummary();
+    };
+    $("autoRulesSection").addEventListener("input", markRulesDirty);
+    $("autoRulesSection").addEventListener("change", markRulesDirty);
+    $("autoFamilies").addEventListener("change", markRulesDirty);
+    $("autoRulesSaveBtn").onclick = () => saveAutonomy().catch(error => toast(error.message));
     $("autoApproveBtn").onclick = approveAutonomyWeek;
     $("sgiKeyBtn").onclick = () => saveSgiKey().catch(error => toast(error.message));
     $("sgiSyncBtn").onclick = () => syncSgi().catch(error => toast(error.message));

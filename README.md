@@ -69,9 +69,11 @@ y las fotos de Google Drive:
 - publica **solo lo que tiene stock** en el SGI, con su **precio de venta**;
 - si un producto tiene precios distintos entre bodegas, precio en revision o sin
   precio, **no lo publica** y lo muestra en el panel;
-- usa las fotos de Drive nombradas con el codigo del SGI
-  (`CODIGO-COLOR - descripcion - 001.jpg`); si no hay, usa la foto local de
-  respaldo. Nunca usa flyers, publicidad, infografias ni fotos de inventario;
+- busca en toda la carpeta de Drive configurada, con sus subcarpetas, las fotos
+  nombradas con el codigo del SGI (`CODIGO-COLOR - descripcion - 001.jpg`); si
+  no hay, usa la foto local de respaldo. Pone primero las fotos del producto y
+  despues flyers, publicidad e infografias. No usa fotos de inventario ni de
+  empaque;
 - justo antes de cada anuncio vuelve a comprobar que el producto sigue con stock.
 
 Configuracion:

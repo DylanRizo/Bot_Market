@@ -75,7 +75,8 @@ STORE.migrate_activity(ACTIVITY_PATH)
 SGI_DRIVE_TOKEN_PATH = SCRATCH_DIR / "token_google_drive.json"
 SGI_REPORT_PATH = SCRATCH_DIR / "sgi_sync_report.json"
 _drive_authorization_lock = threading.Lock()
-_drive_authorization: dict[str, Any] = {"error": "", "running": False}
+_drive_authorization: dict[str, Any] = {"error": "", "running": False, "url": ""}
+DRIVE_AUTHORIZATION_TIMEOUT_SECONDS = 300
 
 
 def json_load(path: Path, fallback: Any) -> Any:
@@ -110,24 +111,37 @@ def sgi_status() -> dict[str, Any]:
     }
 
 
-def start_drive_authorization() -> None:
-    """Abre el consentimiento de Google en el navegador sin bloquear el panel."""
+def start_drive_authorization(wait_seconds: float = 10.0) -> str:
+    """Prepara el consentimiento de Google y devuelve el enlace para abrirlo.
+
+    El panel corre como proceso oculto y desde ahi el navegador no siempre se
+    abre, asi que el enlace lo abre la pestana del panel. La espera de Google
+    caduca sola para que el boton se pueda volver a usar.
+    """
     with _drive_authorization_lock:
         if _drive_authorization["running"]:
-            return
-        _drive_authorization.update(error="", running=True)
+            return str(_drive_authorization["url"])
+        _drive_authorization.update(error="", running=True, url="")
 
     def authorize() -> None:
         try:
             from drive_photos import DriveLibrary
 
-            DriveLibrary.connect(interactive=True)
+            DriveLibrary.connect(
+                interactive=True,
+                open_url=lambda url: _drive_authorization.update(url=url),
+                timeout_seconds=DRIVE_AUTHORIZATION_TIMEOUT_SECONDS,
+            )
         except Exception as exc:
-            _drive_authorization["error"] = str(exc)[:300]
+            _drive_authorization["error"] = str(exc)[:300] or "No se completo la autorizacion de Google Drive."
         finally:
-            _drive_authorization["running"] = False
+            _drive_authorization.update(running=False, url="")
 
     threading.Thread(target=authorize, daemon=True).start()
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline and _drive_authorization["running"] and not _drive_authorization["url"]:
+        time.sleep(0.05)
+    return str(_drive_authorization["url"])
 
 
 def json_save(path: Path, payload: Any) -> None:
@@ -727,8 +741,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def authorized(self, require_header: bool = False) -> bool:
         if not SESSION_TOKEN:
             return True
-        presented = self.cookie_token() or self.query_token()
-        if not secrets.compare_digest(presented, SESSION_TOKEN):
+        # El navegador puede traer la cookie de un panel anterior: si el enlace
+        # trae el token vigente, ese enlace debe entrar y renovar la cookie.
+        expected = SESSION_TOKEN.encode("utf-8")
+        presented = [token for token in (self.query_token(), self.cookie_token()) if token]
+        if not any(secrets.compare_digest(token.encode("utf-8"), expected) for token in presented):
             return False
         if not require_header:
             return True
@@ -1169,10 +1186,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _post_sgi_drive_authorize(self) -> None:
         """POST /api/sgi/drive/authorize"""
-        start_drive_authorization()
-        self.send_json(
-            {"message": "Se abrió el navegador para autorizar Google Drive en solo lectura.", "ok": True}
-        )
+        url = start_drive_authorization()
+        if not url:
+            error = _drive_authorization["error"] or "No pude preparar la autorizacion de Google Drive."
+            self.send_json({"error": error, "ok": False}, status=502)
+            return
+        self.send_json({"ok": True, "url": url})
 
     # Mapa de rutas POST. Tenerlas en una tabla en vez de una cadena de ifs
     # permite enumerarlas: las pruebas comprueban que el frontend no llame a

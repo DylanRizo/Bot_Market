@@ -4,18 +4,20 @@ Sigue la convencion MKT-GUI-001 del Departamento de Marketing:
 ``CODIGO-COLOR - Nombre descriptivo - Numero.ext``, con la talla omitida. Una
 foto ``CMP-NEG`` sirve para ``CMP-NEG-S``, ``CMP-NEG-M`` y ``CMP-NEG-L``.
 
-Solo se usan fotografias de producto. Flyers, publicidad, infografias, tomas de
-inventario y de empaque quedan fuera: suelen llevar precios impresos o no
-muestran el producto como se vende.
+Se busca en toda la carpeta configurada. Las fotografias de producto van primero
+y despues flyers, publicidad e infografias con el mismo codigo, para que la
+portada del anuncio muestre el producto. Las tomas de inventario y de empaque
+quedan fuera: muestran varios productos o no lo muestran como se vende.
 """
 from __future__ import annotations
 
 import io
 import re
 import unicodedata
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
@@ -31,11 +33,12 @@ TITLE_PATTERN = re.compile(
 )
 FOLDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{10,}$")
 SIZE_TOKENS = {"XS", "S", "M", "L", "XL", "2XL", "XXL", "3XL", "U", "UNI", "X"}
-EXCLUDED_DESCRIPTION_WORDS = ("publicidad", "infografia", "inventario", "empaque", "flyer")
+EXCLUDED_DESCRIPTION_WORDS = ("inventario", "empaque")
+PROMOTIONAL_DESCRIPTION_WORDS = ("publicidad", "infografia", "flyer")
 EXCLUDED_CODES = {"MKT-MUL"}
 IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "heic", "heif"}
 HEIF_EXTENSIONS = {"heic", "heif"}
-DEFAULT_EXCLUDED_FOLDERS = ("Flyers publicitarios",)
+DEFAULT_EXCLUDED_FOLDERS: tuple[str, ...] = ()
 
 
 class DriveNotAuthorized(RuntimeError):
@@ -64,6 +67,7 @@ class DrivePhoto:
     number: int
     extension: str
     md5: str
+    promotional: bool = False
 
 
 def parse_photo(file: dict[str, Any]) -> DrivePhoto | None:
@@ -75,7 +79,8 @@ def parse_photo(file: dict[str, Any]) -> DrivePhoto | None:
     extension = match["extension"].lower()
     if code in EXCLUDED_CODES or code.endswith("-VAR") or extension not in IMAGE_EXTENSIONS:
         return None
-    if any(word in plain_text(match["description"]) for word in EXCLUDED_DESCRIPTION_WORDS):
+    description = plain_text(match["description"])
+    if any(word in description for word in EXCLUDED_DESCRIPTION_WORDS):
         return None
     md5 = str(file.get("md5Checksum") or "")
     if not md5 or not file.get("id"):
@@ -87,6 +92,7 @@ def parse_photo(file: dict[str, Any]) -> DrivePhoto | None:
         number=int(match["number"]),
         extension=extension,
         md5=md5,
+        promotional=any(word in description for word in PROMOTIONAL_DESCRIPTION_WORDS),
     )
 
 
@@ -95,10 +101,11 @@ def group_photos(files: Iterable[dict[str, Any]]) -> dict[str, list[DrivePhoto]]
 
     Las mismas fotos estan copiadas en varias carpetas (por ejemplo en "Pagina
     web"), a veces con otro nombre. Se descartan por contenido (``md5``) para no
-    publicar la misma imagen dos veces en un anuncio.
+    publicar la misma imagen dos veces en un anuncio. La publicidad va despues
+    de las fotos del producto, asi nunca queda como portada si hay una foto real.
     """
     parsed = [photo for photo in (parse_photo(file) for file in files) if photo]
-    parsed.sort(key=lambda photo: (photo.group, photo.number, photo.title))
+    parsed.sort(key=lambda photo: (photo.group, photo.promotional, photo.number, photo.title))
     seen: set[str] = set()
     groups: dict[str, list[DrivePhoto]] = {}
     for photo in parsed:
@@ -123,6 +130,21 @@ def convert_heif_to_jpeg(data: bytes) -> bytes:
         return output.getvalue()
 
 
+CAPTURE_BROWSER_NAME = "marketplace-bot-captura"
+
+
+class _CaptureBrowser(webbrowser.BaseBrowser):
+    """Navegador falso: entrega el enlace de Google a quien lo vaya a abrir."""
+
+    def __init__(self, deliver: Callable[[str], None]) -> None:
+        super().__init__(CAPTURE_BROWSER_NAME)
+        self._deliver = deliver
+
+    def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool:
+        self._deliver(url)
+        return True
+
+
 class DriveLibrary:
     def __init__(self, service: Any, cache_dir: Path = CACHE_DIR) -> None:
         self._service = service
@@ -136,7 +158,14 @@ class DriveLibrary:
         *,
         interactive: bool = False,
         cache_dir: Path = CACHE_DIR,
+        open_url: Callable[[str], None] | None = None,
+        timeout_seconds: int | None = None,
     ) -> DriveLibrary:
+        """Conecta con Drive; si falta el permiso y es interactivo, pide el consentimiento.
+
+        ``open_url`` recibe el enlace de Google en lugar de abrir un navegador: el
+        panel corre como proceso oculto y desde ahi el navegador no siempre abre.
+        """
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
@@ -159,7 +188,11 @@ class DriveLibrary:
             from google_auth_oauthlib.flow import InstalledAppFlow
 
             flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), scopes=SCOPES)
-            credentials = flow.run_local_server(port=0)
+            browser = None
+            if open_url is not None:
+                webbrowser.register(CAPTURE_BROWSER_NAME, None, _CaptureBrowser(open_url))
+                browser = CAPTURE_BROWSER_NAME
+            credentials = flow.run_local_server(port=0, browser=browser, timeout_seconds=timeout_seconds)
         token_path.write_text(credentials.to_json(), encoding="utf-8")
         return cls(build("drive", "v3", credentials=credentials, cache_discovery=False), cache_dir)
 
