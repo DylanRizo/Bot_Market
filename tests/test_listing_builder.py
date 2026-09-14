@@ -12,6 +12,7 @@ from marketplace_listing_builder import (
     price_text,
     sort_sizes,
     validate_image,
+    validate_images,
     validated_override_tags,
 )
 
@@ -73,6 +74,35 @@ def test_validate_image_falla_si_no_hay_nada(tmp_path: Path):
     (tmp_path / "VACIO").mkdir()
     with pytest.raises(FileNotFoundError):
         validate_image(tmp_path, "VACIO", "")
+
+
+def fotos_de_color(tmp_path: Path, carpeta: str, cantidad: int) -> Path:
+    destino = tmp_path / carpeta
+    destino.mkdir()
+    for numero in range(1, cantidad + 1):
+        Image.new("RGB", (600, 600), (numero * 20, 0, 0)).save(destino / f"foto_{numero}.jpg", quality=95)
+    return destino
+
+
+def test_validate_images_lee_varias_fotos_como_las_deja_el_sgi(tmp_path: Path):
+    """La sincronizacion escribe todas las fotos del color en una fila: foto_1;foto_2;..."""
+    fotos_de_color(tmp_path, "CMP-BLA", 6)
+    nombres = ";".join(f"foto_{numero}" for numero in range(1, 7))
+    assert validate_images(tmp_path, "CMP-BLA", nombres) == ("CMP-BLA", [f"foto_{numero}.jpg" for numero in range(1, 7)])
+    # El anuncio agrupado usa una sola foto por color.
+    assert validate_image(tmp_path, "CMP-BLA", nombres) == ("CMP-BLA", "foto_1.jpg")
+
+
+def test_validate_images_salta_las_que_no_sirven_y_respeta_el_limite(tmp_path: Path):
+    carpeta = fotos_de_color(tmp_path, "CMP-NEG", 3)
+    (carpeta / "foto_9.jpg").write_bytes(b"esto no es una imagen" * 100)
+    assert validate_images(tmp_path, "CMP-NEG", "foto_9;foto_1;foto_2;foto_3", limit=2) == ("CMP-NEG", ["foto_1.jpg", "foto_2.jpg"])
+
+
+def test_validate_images_falla_si_ninguna_foto_sirve(tmp_path: Path):
+    (tmp_path / "CMP-GRI").mkdir()
+    with pytest.raises(FileNotFoundError):
+        validate_images(tmp_path, "CMP-GRI", "foto_1;foto_2")
 
 
 def test_validated_override_tags_acepta_json_y_limpia():

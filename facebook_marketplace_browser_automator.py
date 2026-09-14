@@ -16,6 +16,7 @@ from selenium.common.exceptions import WebDriverException
 from selenium.webdriver import ChromeOptions
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -475,16 +476,90 @@ def set_dynamic_field(driver: webdriver.Chrome, locate_field, value: str, attemp
     raise RuntimeError(" | ".join(errors[-2:]))
 
 
+PRODUCT_TAGS_LIMIT = 20
+SUBMIT_TAG_LABEL = "Click to submit current value"
+
+
+def product_tag_chips(driver: webdriver.Chrome, field) -> list[str]:
+    """Etiquetas que Facebook ya convirtio en fichas junto al campo."""
+    return driver.execute_script(
+        """
+        const field = arguments[0];
+        const submitLabel = arguments[1];
+        let box = field;
+        for (let i = 0; box && i < 8; i++) {
+            if (String(box.innerText || '').includes('Limit')) break;
+            box = box.parentElement;
+        }
+        return [...(box || field.parentElement).querySelectorAll('[role="button"]')]
+            .filter(el => (el.getAttribute('aria-label') || '') !== submitLabel)
+            .map(el => String(el.innerText || '').trim())
+            .filter(Boolean);
+        """,
+        field,
+        SUBMIT_TAG_LABEL,
+    )
+
+
+def submit_tag_button(driver: webdriver.Chrome, field):
+    return driver.execute_script(
+        """
+        let box = arguments[0];
+        for (let i = 0; box && i < 8; i++) {
+            const button = box.querySelector(`[role="button"][aria-label="${arguments[1]}"]`);
+            if (button) return button;
+            box = box.parentElement;
+        }
+        return null;
+        """,
+        field,
+        SUBMIT_TAG_LABEL,
+    )
+
+
 def fill_product_tags(driver: webdriver.Chrome, tags: list[str]) -> int:
-    if not tags:
+    """Crea una ficha por etiqueta.
+
+    Product tags es un selector de fichas: cada etiqueta se escribe y se
+    confirma con Enter (o con el boton +). Pegar todas separadas por comas
+    dejaba una sola etiqueta larga.
+    """
+    clean_tags: list[str] = []
+    for tag in tags:
+        value = str(tag).strip()
+        if value and value.lower() not in {existing.lower() for existing in clean_tags}:
+            clean_tags.append(value)
+    clean_tags = clean_tags[:PRODUCT_TAGS_LIMIT]
+    if not clean_tags:
         return 0
-    clean_tags = [str(tag).strip() for tag in tags[:8] if str(tag).strip()]
-    # Product tags is currently a textarea in Marketplace, not a token picker.
-    # A single comma-separated value survives React re-renders more reliably
-    # than pressing Enter after each item.
-    set_dynamic_field(driver, product_tags_field, ", ".join(clean_tags))
-    log(f"Product tags: {len(clean_tags)}")
-    return len(clean_tags)
+
+    field = product_tags_field(driver)
+    if str(field.get_attribute("value") or "").strip():
+        set_value(driver, field, "")
+    for tag in clean_tags:
+        field = product_tags_field(driver, timeout=5)
+        if tag.lower() in {chip.lower() for chip in product_tag_chips(driver, field)}:
+            continue
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", field)
+        field.click()
+        field.send_keys(tag)
+        time.sleep(0.3)
+        field.send_keys(Keys.ENTER)
+        time.sleep(0.6)
+        field = product_tags_field(driver, timeout=5)
+        if tag.lower() not in {chip.lower() for chip in product_tag_chips(driver, field)}:
+            button = submit_tag_button(driver, field)
+            if button is not None:
+                ActionChains(driver).move_to_element(button).click().perform()
+                time.sleep(0.6)
+
+    field = product_tags_field(driver, timeout=5)
+    chips = {chip.lower() for chip in product_tag_chips(driver, field)}
+    created = sum(1 for tag in clean_tags if tag.lower() in chips)
+    log(f"Product tags: {created}/{len(clean_tags)}")
+    if created == 0:
+        raise RuntimeError("Facebook no creo ninguna etiqueta.")
+    return created
 
 
 def xpath_literal(text: str) -> str:
@@ -806,11 +881,166 @@ def click_open_dropdown_option(driver: webdriver.Chrome, value: str) -> bool:
     return True
 
 
-def choose_dropdown_option(driver: webdriver.Chrome, label: str, value: str) -> bool:
-    close_floating_panels(driver)
-    if not open_combobox(driver, label):
-        return False
-    return click_open_dropdown_option(driver, value)
+OPTION_TEXT_JS = r"""
+const norm = s => String(s || '').replace(/[‘’´`]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
+const visible = el => {
+    const r = el.getBoundingClientRect();
+    const st = getComputedStyle(el);
+    return r.width > 1 && r.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
+};
+"""
+
+
+def find_dropdown_option(driver: webdriver.Chrome, value: str):
+    """Opcion del menu abierto cuya primera linea es exactamente ``value``.
+
+    Marketplace dibuja el menu como un dialogo con desplazamiento propio; cada
+    opcion es un boton con el nombre en la primera linea ("Shipping available"
+    va debajo) y puede estar fuera de la vista hasta desplazar el dialogo.
+    """
+    return driver.execute_script(
+        OPTION_TEXT_JS
+        + """
+        const wanted = norm(arguments[0]);
+        const menus = [...document.querySelectorAll('[role="dialog"], [role="listbox"], [role="menu"]')].filter(visible);
+        for (const menu of menus) {
+            const options = menu.querySelectorAll('[role="button"], [role="option"], [role="menuitem"], [role="menuitemradio"], [role="radio"]');
+            for (const option of options) {
+                const first = norm(String(option.innerText || option.getAttribute('aria-label') || '').split('\\n')[0]);
+                if (first === wanted) return option;
+            }
+        }
+        return null;
+        """,
+        value,
+    )
+
+
+def dropdown_shows_value(driver: webdriver.Chrome, label: str, value: str) -> bool:
+    """El campo del formulario ya muestra ``value`` junto a su etiqueta."""
+    return bool(
+        driver.execute_script(
+            OPTION_TEXT_JS
+            + """
+            const label = norm(arguments[0]);
+            const wanted = norm(arguments[1]);
+            return [...document.querySelectorAll('label[role="combobox"]')].some(el => {
+                const text = norm(el.innerText);
+                if (!text.startsWith(label)) return false;
+                const shown = text.slice(label.length).trim();
+                return shown === wanted || shown.includes(wanted);
+            });
+            """,
+            label,
+            value,
+        )
+    )
+
+
+def bring_menu_option_into_view(driver: webdriver.Chrome, option) -> dict[str, Any]:
+    """Desplaza solo la lista del menu hasta dejar la opcion a la vista.
+
+    ``scrollIntoView`` tambien movia el panel del formulario, y Facebook cierra
+    o recoloca el menu cuando se mueve el campo que lo abrio.
+    """
+    return driver.execute_script(
+        """
+        const option = arguments[0];
+        const menu = option.closest('[role="dialog"], [role="listbox"], [role="menu"]') || document.body;
+        let scroller = option.parentElement;
+        while (scroller && scroller !== menu && scroller.scrollHeight <= scroller.clientHeight + 10) {
+            scroller = scroller.parentElement;
+        }
+        if (scroller && scroller.scrollHeight > scroller.clientHeight + 10) {
+            const box = scroller.getBoundingClientRect();
+            const top = Math.max(box.top, 0);
+            const bottom = Math.min(box.bottom, innerHeight);
+            const rect = option.getBoundingClientRect();
+            const target = top + Math.max(0, (bottom - top - rect.height) / 2);
+            scroller.scrollTop += rect.top - target;
+        }
+        const rect = option.getBoundingClientRect();
+        return {
+            x: Math.round(rect.left + Math.min(rect.width / 2, 80)),
+            y: Math.round(rect.top + rect.height / 2),
+            inView: rect.top >= 0 && rect.bottom <= innerHeight,
+        };
+        """,
+        option,
+    )
+
+
+def click_like_a_person(driver: webdriver.Chrome, element) -> dict[str, Any]:
+    position = bring_menu_option_into_view(driver, element)
+    time.sleep(0.4)
+    try:
+        ActionChains(driver).move_to_element(element).click().perform()
+        position["method"] = "selenium"
+    except Exception:
+        driver.execute_script(
+            """
+            const el = arguments[0];
+            const x = arguments[1];
+            const y = arguments[2];
+            const target = document.elementFromPoint(x, y) || el;
+            for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                target.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, view: window, clientX: x, clientY: y}));
+            }
+            """,
+            element,
+            position["x"],
+            position["y"],
+        )
+        position["method"] = "eventos"
+    return position
+
+
+def choose_dropdown_option(driver: webdriver.Chrome, label: str, value: str, attempts: int = 3) -> bool:
+    """Elige una opcion y confirma que el formulario la muestra.
+
+    Sin esta comprobacion el bot daba por elegida una categoria que Facebook no
+    habia registrado, y sin categoria no aparecen Description ni Product tags.
+    """
+    if dropdown_shows_value(driver, label, value):
+        return True
+    for attempt in range(1, attempts + 1):
+        if dropdown_menu_open(driver):
+            close_floating_panels(driver)
+        if not open_combobox(driver, label):
+            return False
+        option = find_dropdown_option(driver, value)
+        position: dict[str, Any] = {}
+        if option is not None:
+            position = click_like_a_person(driver, option)
+        else:
+            click_open_dropdown_option(driver, value)
+        # Facebook tarda en volver a dibujar el formulario despues de elegir.
+        if wait_dropdown_value(driver, label, value, timeout=5):
+            return True
+        log(f"{label}: intento {attempt} sin confirmar {value} (opcion encontrada: {option is not None}, clic: {position})")
+    if dropdown_menu_open(driver):
+        close_floating_panels(driver)
+    return False
+
+
+def dropdown_menu_open(driver: webdriver.Chrome) -> bool:
+    return bool(
+        driver.execute_script(
+            OPTION_TEXT_JS
+            + """
+            return [...document.querySelectorAll('[role="dialog"][aria-label="Dropdown menu"], [role="listbox"], [role="menu"]')].some(visible);
+            """
+        )
+    )
+
+
+def wait_dropdown_value(driver: webdriver.Chrome, label: str, value: str, timeout: float = 5) -> bool:
+    end = time.time() + timeout
+    while time.time() < end:
+        if dropdown_shows_value(driver, label, value):
+            return True
+        time.sleep(0.25)
+    return False
 
 
 def wait_for_manual_category(driver: webdriver.Chrome, timeout: int) -> None:
@@ -879,12 +1109,8 @@ def main() -> None:
         stage = "required-fields"
         fill_required_text_fields(driver, product)
 
-        stage = "condition"
-        condition_ok = choose_dropdown_option(driver, "Condition", product["condition"])
-        log(f"Condition {product['condition']}: {'OK' if condition_ok else 'NO ENCONTRADA'}")
-        if not condition_ok:
-            raise RuntimeError(f"No pude seleccionar Condition={product['condition']}.")
-
+        # La categoria va primero: al cambiarla Facebook vuelve a dibujar el
+        # formulario y agrega los campos propios de esa categoria.
         stage = "category"
         if args.inspect_categories:
             choose_dropdown_option(driver, "Category", product["category"])
@@ -903,6 +1129,12 @@ def main() -> None:
                 wait_for_manual_category(driver, args.manual_category_timeout)
             else:
                 raise RuntimeError(f"No pude seleccionar Category={product['category']}.")
+
+        stage = "condition"
+        condition_ok = choose_dropdown_option(driver, "Condition", product["condition"])
+        log(f"Condition {product['condition']}: {'OK' if condition_ok else 'NO ENCONTRADA'}")
+        if not condition_ok:
+            raise RuntimeError(f"No pude seleccionar Condition={product['condition']}.")
 
         stage = "optional-fields"
         fill_optional_details(driver, product, fill_sku=not args.skip_sku_field, strict=args.strict_details)

@@ -123,30 +123,50 @@ def listing_intro(base: str) -> str:
     return f"{base} nuevo, ideal para uso diario o para completar tu estilo."
 
 
-def validate_image(images_root: Path, folder: str, image_name: str) -> tuple[str, str]:
-    folder_path = images_root / folder
-    candidates: list[Path] = []
+def _image_candidates(folder_path: Path, image_name: str) -> list[Path]:
     raw = Path(image_name)
     if raw.is_absolute():
-        candidates.append(raw)
-    elif image_name:
+        return [raw]
+    if image_name:
         exact = folder_path / image_name
-        candidates.append(exact)
+        candidates = [exact]
         if exact.suffix.lower() not in IMAGE_EXTENSIONS:
             candidates.extend(folder_path / f"{image_name}{ext}" for ext in IMAGE_EXTENSIONS)
-    else:
-        candidates.extend(path for path in folder_path.glob("*") if path.suffix.lower() in IMAGE_EXTENSIONS)
+        return candidates
+    return [path for path in folder_path.glob("*") if path.suffix.lower() in IMAGE_EXTENSIONS]
 
-    for candidate in candidates:
-        if not candidate.exists() or candidate.stat().st_size < 1024:
-            continue
-        try:
-            with Image.open(candidate) as image:
-                image.verify()
-            return folder, candidate.name
-        except Exception:
-            continue
-    raise FileNotFoundError(f"No encontre imagen valida para {folder}/{image_name}")
+
+def _is_valid_image(candidate: Path) -> bool:
+    if not candidate.exists() or candidate.stat().st_size < 1024:
+        return False
+    try:
+        with Image.open(candidate) as image:
+            image.verify()
+        return True
+    except Exception:
+        return False
+
+
+def validate_images(images_root: Path, folder: str, image_name: str, limit: int = 10) -> tuple[str, list[str]]:
+    """Fotos validas de una fila. ``NombreImg`` puede traer varias separadas por ``;``
+    (``foto_1;foto_2``), igual que las lee el publicador."""
+    folder_path = images_root / folder
+    names = [value.strip() for value in str(image_name or "").split(";") if value.strip()] or [""]
+    valid: list[str] = []
+    for name in names:
+        found = next((candidate for candidate in _image_candidates(folder_path, name) if _is_valid_image(candidate)), None)
+        if found and found.name not in valid:
+            valid.append(found.name)
+        if len(valid) >= limit:
+            break
+    if not valid:
+        raise FileNotFoundError(f"No encontre imagen valida para {folder}/{image_name}")
+    return folder, valid
+
+
+def validate_image(images_root: Path, folder: str, image_name: str) -> tuple[str, str]:
+    folder, names = validate_images(images_root, folder, image_name, limit=1)
+    return folder, names[0]
 
 
 def validated_override_images(value: str) -> list[str]:
@@ -258,7 +278,7 @@ def row_to_public_listing(
     ai_model: str,
     ai_tone: str,
 ) -> tuple[dict[str, Any], str]:
-    folder, image = validate_image(images_root, text_value(row.get("CarpetaImg")), text_value(row.get("NombreImg")) or "foto_1")
+    folder, images = validate_images(images_root, text_value(row.get("CarpetaImg")), text_value(row.get("NombreImg")) or "foto_1")
     title = text_value(row.get("Titulo"))
     parsed = parse_title(title)
     price = price_number(row.get("Precio"))
@@ -299,7 +319,7 @@ def row_to_public_listing(
         "Sku": text_value(row.get("Sku")),
         "Ubicacion": location,
         "CarpetaImg": folder,
-        "NombreImg": image,
+        "NombreImg": ";".join(images),
     }
     return listing, source
 
