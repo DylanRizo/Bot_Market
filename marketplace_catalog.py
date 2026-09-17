@@ -13,34 +13,42 @@ INVENTORY_PATH = SCRATCH_DIR / "ArticulosGenerados.xlsx"
 IMAGES_ROOT = SCRATCH_DIR / "imagenes_firupost"
 
 CLOTHING = "Men's clothing & shoes"
+WOMEN = "Women's clothing & shoes"
+BAGS = "Bags & Luggage"
 SPORTS = "Sports & Outdoors"
 DEFAULT_CATEGORY = CLOTHING
 
 # Las familias se reconocen por el prefijo del SKU del SGI (MKT-GUI-001). Las
 # nueve primeras conservan su clave porque el historial de publicaciones y de
-# fotos usadas por cuenta cuelga de ella. Solo se usan categorias de Marketplace
-# ya probadas en el formulario; las familias de tecnologia (HUB, PAD, SOP)
-# quedan fuera hasta verificar su categoria.
+# fotos usadas por cuenta cuelga de ella. La categoria debe ser la real del
+# producto: Marketplace muestra menos (y puede retirar) un anuncio mal
+# clasificado. Las cuatro usadas aparecen en el menu del formulario (septiembre
+# 2026); las familias de tecnologia (HUB, PAD, SOP) quedan fuera hasta verificar
+# su categoria.
 ASSISTANT_PRESETS: dict[str, dict[str, Any]] = {
     "compression_short": {"label": "Camisas manga corta de compresion", "sku_prefixes": ["CMP-"], "category": CLOTHING},
     "compression_sleeveless": {"label": "Camisas sin mangas", "sku_prefixes": ["CSM-"], "category": CLOTHING},
-    "leggins": {"label": "Leggins deportivos", "sku_prefixes": ["LEG-"], "category": CLOTHING},
-    "enterizos": {"label": "Enterizos de entrenamiento", "sku_prefixes": ["ENT-"], "category": CLOTHING},
+    "leggins": {"label": "Leggins deportivos", "sku_prefixes": ["LEG-"], "category": WOMEN},
+    "enterizos": {"label": "Enterizos de entrenamiento", "sku_prefixes": ["ENT-"], "category": WOMEN},
     "shorts": {"label": "Shorts deportivos", "sku_prefixes": ["SHT-"], "category": CLOTHING},
-    "bolsos": {"label": "Bolsos deportivos", "sku_prefixes": ["BOL-"], "category": SPORTS},
+    "bolsos": {"label": "Bolsos deportivos", "sku_prefixes": ["BOL-"], "category": BAGS},
     "durags": {"label": "Durags", "sku_prefixes": ["DUR-"], "category": CLOTHING},
     "munequeras": {"label": "Munequeras deportivas", "sku_prefixes": ["MUN-"], "category": SPORTS},
     "straps": {"label": "Straps para gimnasio", "sku_prefixes": ["STR-"], "category": SPORTS},
     "compression_long": {"label": "Camisas manga larga de compresion", "sku_prefixes": ["CML-"], "category": CLOTHING},
-    "bershka": {"label": "Camisas Bershka", "sku_prefixes": ["BSH-"], "category": CLOTHING},
+    "bershka": {"label": "Camisas Bershka", "sku_prefixes": ["BSH-", "BSK-"], "category": CLOTHING},
     "chalecos": {"label": "Chalecos de lana sin mangas", "sku_prefixes": ["CHA-"], "category": CLOTHING},
-    "tops": {"label": "Tops deportivos", "sku_prefixes": ["TOP-"], "category": CLOTHING},
+    "tops": {"label": "Tops deportivos", "sku_prefixes": ["TOP-"], "category": WOMEN},
     "joggers": {"label": "Pantalones jogger", "sku_prefixes": ["JOG-"], "category": CLOTHING},
     "calcetas": {"label": "Calcetas de compresion", "sku_prefixes": ["CAL-"], "category": CLOTHING},
-    "mochilas": {"label": "Mochilas antirrobo", "sku_prefixes": ["MOC-"], "category": SPORTS},
+    "mochilas": {"label": "Mochilas antirrobo", "sku_prefixes": ["MOC-"], "category": BAGS},
     "rodilleras": {"label": "Rodilleras deportivas", "sku_prefixes": ["ROD-"], "category": SPORTS},
     "cinturones": {"label": "Cinturones de gimnasio", "sku_prefixes": ["CIN-"], "category": SPORTS},
     "mangas_brazo": {"label": "Mangas para brazo", "sku_prefixes": ["MAN-"], "category": SPORTS},
+    # Productos que el SGI ya tiene con stock (septiembre 2026).
+    "enterizos_largos": {"label": "Enterizos largos de gym", "sku_prefixes": ["ENL-"], "category": WOMEN},
+    "faldas": {"label": "Faldas deportivas", "sku_prefixes": ["FAL-"], "category": WOMEN},
+    "shorts_youngla": {"label": "Shorts YoungLA", "sku_prefixes": ["SHYLA-"], "category": CLOTHING},
 }
 
 
@@ -188,6 +196,7 @@ def catalog_families(
                 "key": family_key,
                 "label": preset["label"],
                 "category": preset.get("category") or "Men's clothing & shoes",
+                "sku_prefixes": list(preset.get("sku_prefixes") or []),
                 "variant_count": len(matches),
                 "valid_variant_count": len(valid),
                 "price_from": min(prices) if prices else None,

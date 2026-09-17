@@ -158,21 +158,34 @@
             <div class="metric"><strong id="autoWorker">Detenido</strong><span>Trabajador</span></div>
           </div>
 
-          <div class="assistant-section" id="sgiSection">
+          <div id="autoChecklist" class="checklist" aria-live="polite"></div>
+
+          <div class="assistant-section">
             <div class="section-heading">
-              <div><span class="step-label">Inventario</span><h3>Conexión con el SGI</h3></div>
+              <div><span class="step-label">Cuentas</span><h3>Estado de cada cuenta</h3></div>
+            </div>
+            <div id="accountHealth" class="health-grid"></div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading">
+              <div><span class="step-label">Atención</span><h3>Alertas</h3></div>
+              <button id="autoResolveAllBtn" hidden>Marcar todas como revisadas</button>
+            </div>
+            <div id="autoAlerts" class="review-empty">No hay alertas abiertas.</div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading">
+              <div><span class="step-label">Calendario</span><h3>Próximas publicaciones</h3></div>
               <div class="toolbar">
-                <button id="sgiDriveBtn">Autorizar Google Drive</button>
-                <button id="sgiSyncBtn" class="primary">Sincronizar ahora</button>
+                <button id="autoGenerateBtn">Generar semana</button>
+                <button id="autoApproveBtn" class="primary">Aprobar pendientes</button>
               </div>
             </div>
-            <p class="muted">El bot publica solo lo que tiene stock en el SGI, con su precio de venta, y usa las fotos de producto de Drive.</p>
-            <div id="sgiStatus" class="metric-strip"></div>
-            <div class="schedule-grid">
-              <div><label for="sgiKey">Llave de integración del SGI</label><input id="sgiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Pégala aquí; no se vuelve a mostrar"></div>
-              <div><label>&nbsp;</label><button id="sgiKeyBtn">Guardar llave</button></div>
-            </div>
-            <div id="sgiLists"></div>
+            <div id="autoApprovalBanner" class="approval-banner" hidden></div>
+            <p id="autoGenerateNote" class="generate-note" hidden></p>
+            <div id="autonomyCalendar" class="calendar-week"></div>
           </div>
 
           <div class="assistant-section" id="autoRulesSection">
@@ -247,16 +260,68 @@
                 </div>
                 <small class="field-help">La variación mueve cada hora unos minutos para que el patrón no sea siempre idéntico.</small>
               </fieldset>
+              <fieldset class="rules-card rules-card-wide" id="safetyCard">
+                <legend>5. Protección de cuenta</legend>
+                <div class="safety-head">
+                  <label class="toggle-line"><input id="safetyEnabled" type="checkbox"> Activar protección <small>(recomendado)</small></label>
+                  <div class="segmented" role="radiogroup" aria-label="Nivel de protección">
+                    <label><input type="radio" name="safetyLevel" value="conservative"> Prudente</label>
+                    <label><input type="radio" name="safetyLevel" value="balanced"> Equilibrado</label>
+                    <label><input type="radio" name="safetyLevel" value="active"> Activo</label>
+                    <label><input type="radio" name="safetyLevel" value="custom"> Personalizado</label>
+                  </div>
+                </div>
+                <div class="field-pair safety-grid">
+                  <div class="field"><label for="safetyDay">Máximo por cuenta al día</label><div class="input-unit"><input id="safetyDay" type="number" min="1" max="20"><span>anuncios</span></div></div>
+                  <div class="field"><label for="safetyWeek">Máximo por cuenta en 7 días</label><div class="input-unit"><input id="safetyWeek" type="number" min="1" max="100"><span>anuncios</span></div></div>
+                  <div class="field"><label for="safetyGap">Separación en la misma cuenta</label><div class="input-unit"><input id="safetyGap" type="number" min="0" step="15"><span>minutos</span></div></div>
+                  <div class="field"><label for="safetyCross">Separación entre cuentas</label><div class="input-unit"><input id="safetyCross" type="number" min="0" step="15"><span>minutos</span></div></div>
+                  <div class="field"><label for="safetyRepeat">Repetir un producto en la misma cuenta</label><div class="input-unit"><input id="safetyRepeat" type="number" min="0" max="60"><span>días mínimo</span></div></div>
+                  <div class="field"><label for="safetyFailures">Pausar tras fallos seguidos</label><div class="input-unit"><input id="safetyFailures" type="number" min="1" max="10"><span>fallos</span></div></div>
+                </div>
+                <div class="safety-toggles">
+                  <label class="toggle-line"><input id="safetyWarmup" type="checkbox"> Calentamiento de cuentas nuevas <small>1 anuncio al día la primera semana y 2 la segunda</small></label>
+                  <label class="toggle-line"><input id="safetyVary" type="checkbox"> Variar título y descripción entre cuentas <small>evita anuncios idénticos</small></label>
+                </div>
+                <small class="field-help">Si Facebook muestra un aviso de límite o restricción, la cuenta se pausa sola 72 horas. Tras fallos seguidos descansa 12 horas.</small>
+              </fieldset>
             </div>
             <div id="autoRulesSummary" class="rules-summary" aria-live="polite"></div>
           </div>
 
-          <div class="assistant-section">
-            <div class="section-heading"><div><span class="step-label">Producto nuevo</span><h3>Agregar fuera del inventario</h3></div></div>
+          <details class="assistant-section fold">
+            <summary><span class="step-label">Catálogo</span><h3>Productos en la rotación</h3><span id="autoFamiliesCount" class="selection-badge"></span></summary>
+            <p class="muted">Solo se pueden marcar los productos con stock, precio y al menos una foto.</p>
+            <div id="autoFamilies" class="family-row"></div>
+          </details>
+
+          <details class="assistant-section fold">
+            <summary><span class="step-label">Fotos</span><h3>Fotos por producto y cuenta</h3><span class="selection-badge">Máximo 10 por publicación</span></summary>
+            <p class="muted">Marca las fotos que usará cada cuenta. Usar fotos distintas en cada cuenta evita anuncios repetidos. Pulsa "Guardar reglas" al terminar.</p>
+            <div id="autoPhotoAssignments" class="photo-assignment-list"></div>
+          </details>
+
+          <details class="assistant-section fold" id="sgiSection">
+            <summary><span class="step-label">Inventario</span><h3>Conexión con el SGI</h3><span id="sgiSummaryBadge" class="selection-badge"></span></summary>
+            <div class="toolbar fold-actions">
+              <button id="sgiDriveBtn">Autorizar Google Drive</button>
+              <button id="sgiSyncBtn" class="primary">Sincronizar ahora</button>
+            </div>
+            <p class="muted">El bot publica solo lo que tiene stock en el SGI, con su precio de venta, y usa las fotos de producto de Drive.</p>
+            <div id="sgiStatus" class="metric-strip"></div>
+            <div class="schedule-grid">
+              <div><label for="sgiKey">Llave de integración del SGI</label><input id="sgiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Pégala aquí; no se vuelve a mostrar"></div>
+              <div><label>&nbsp;</label><button id="sgiKeyBtn">Guardar llave</button></div>
+            </div>
+            <div id="sgiLists"></div>
+          </details>
+
+          <details class="assistant-section fold">
+            <summary><span class="step-label">Producto nuevo</span><h3>Agregar fuera del inventario</h3></summary>
             <div class="custom-form">
               <div class="wide"><label>Nombre</label><input id="customTitle" placeholder="Ej: Guantes deportivos Nike"></div>
               <div><label>Precio</label><input id="customPrice" type="number" min="1" step="0.01"></div>
-              <div><label>Categoría</label><select id="customCategory"><option>Sports &amp; Outdoors</option><option>Men's clothing &amp; shoes</option><option>Women's clothing &amp; shoes</option><option>Other</option></select></div>
+              <div><label>Categoría</label><select id="customCategory"><option>Sports &amp; Outdoors</option><option>Men's clothing &amp; shoes</option><option>Women's clothing &amp; shoes</option><option>Bags &amp; Luggage</option><option>Other</option></select></div>
               <div><label>Condición</label><select id="customCondition"><option>New</option><option>Used - Like New</option><option>Used - Good</option></select></div>
               <div><label>Ubicación</label><input id="customLocation" value="Managua, Nicaragua"></div>
               <div class="wide"><label>Etiquetas</label><input id="customTags" placeholder="deportivo, entrenamiento, gimnasio"></div>
@@ -267,39 +332,7 @@
               <div class="full toolbar"><button id="customSaveBtn" class="primary">Guardar producto</button></div>
             </div>
             <div id="customProductsList"></div>
-          </div>
-
-          <div class="assistant-section">
-            <div class="section-heading"><div><span class="step-label">Catálogo</span><h3>Productos disponibles</h3></div></div>
-            <div id="autoFamilies" class="family-row"></div>
-          </div>
-
-          <div class="assistant-section">
-            <div class="section-heading">
-              <div><span class="step-label">Fotos</span><h3>Fotos definidas por producto y cuenta</h3></div>
-              <span class="selection-badge">Máximo 10 por publicación</span>
-            </div>
-            <p class="muted">Marca las fotos que usará cada cuenta. Una misma foto puede quedar seleccionada en cuentas diferentes.</p>
-            <div id="autoPhotoAssignments" class="photo-assignment-list"></div>
-          </div>
-
-          <div class="assistant-section">
-            <div class="section-heading">
-              <div><span class="step-label">Calendario</span><h3>Próximas publicaciones</h3></div>
-              <div class="toolbar">
-                <button id="autoSaveBtn">Guardar reglas</button>
-                <button id="autoGenerateBtn" class="primary">Generar semana</button>
-                <button id="autoApproveBtn">Aprobar pendientes</button>
-              </div>
-            </div>
-            <p id="autoGenerateNote" class="generate-note" hidden></p>
-            <div id="autonomyCalendar" class="calendar-week"></div>
-          </div>
-
-          <div class="assistant-section">
-            <div class="section-heading"><div><span class="step-label">Atención</span><h3>Alertas</h3></div></div>
-            <div id="autoAlerts" class="review-empty">No hay alertas abiertas.</div>
-          </div>
+          </details>
 
           <div class="assistant-section">
             <div class="section-heading"><div><span class="step-label">Resumen</span><h3>Últimos 7 días</h3></div></div>

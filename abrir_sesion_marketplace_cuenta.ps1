@@ -28,6 +28,12 @@ $argsList = @(
   "--lang=en-US",
   "--no-first-run",
   "--no-default-browser-check",
+  # Chrome congela las paginas de ventanas minimizadas o tapadas y los menus de
+  # Marketplace dejan de registrar la opcion elegida. El bot publica sin nadie
+  # delante, asi que la pagina debe seguir viva en segundo plano.
+  "--disable-backgrounding-occluded-windows",
+  "--disable-renderer-backgrounding",
+  "--disable-background-timer-throttling",
   "--new-window",
   "https://www.facebook.com/marketplace"
 )

@@ -34,6 +34,14 @@ class PublishOutcomeUnknown(RuntimeError):
     pass
 
 
+class AccountRestricted(RuntimeError):
+    """Facebook mostro un aviso de limite, restriccion o verificacion."""
+
+
+class ContentRejected(ValueError):
+    """El texto del anuncio incumple una regla que Marketplace castiga."""
+
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 LIST_SEPARATORS = (";", "|")
 
@@ -51,6 +59,10 @@ def error_code(exc: Exception) -> str:
     text = str(exc).lower()
     if isinstance(exc, PublishOutcomeUnknown):
         return "PUBLISH_OUTCOME_UNKNOWN"
+    if isinstance(exc, AccountRestricted):
+        return "ACCOUNT_RESTRICTED"
+    if isinstance(exc, ContentRejected):
+        return "CONTENT_POLICY"
     if any(value in text for value in ("sesion", "log in", "captcha", "2fa", "revision")):
         return "SESSION_BLOCKED"
     if any(value in text for value in ("imagen", "foto", "photo")):
@@ -237,11 +249,37 @@ def read_product(excel_path: Path, images_root: Path, row_index: int) -> dict[st
     }
 
 
+def prepare_window(driver: webdriver.Chrome) -> None:
+    """Deja la pestana al frente y con foco antes de tocar el formulario.
+
+    Cuando el trabajador publica solo, la ventana de Chrome suele estar
+    minimizada o tapada. Chrome frena el dibujado de esas paginas y los menus de
+    Facebook no llegan a registrar la opcion elegida: era el fallo intermitente
+    de "No pude seleccionar Category".
+    """
+    try:
+        if driver.get_window_rect().get("x", 0) <= -30000:
+            driver.maximize_window()
+    except Exception:
+        pass
+    for command, params in (
+        ("Page.bringToFront", {}),
+        ("Emulation.setFocusEmulationEnabled", {"enabled": True}),
+        ("Page.setWebLifecycleState", {"state": "active"}),
+    ):
+        try:
+            driver.execute_cdp_cmd(command, params)
+        except Exception:
+            pass
+
+
 def chrome_driver(args: argparse.Namespace) -> webdriver.Chrome:
     options = ChromeOptions()
     if args.debugger_address:
         options.add_experimental_option("debuggerAddress", args.debugger_address)
-        return webdriver.Chrome(options=options)
+        driver = webdriver.Chrome(options=options)
+        prepare_window(driver)
+        return driver
 
     options.add_argument(f"--user-data-dir={args.chrome_profile}")
     options.add_argument("--profile-directory=Default")
@@ -582,9 +620,39 @@ def upload_photo(driver: webdriver.Chrome, image_paths: list[str]) -> None:
     log(f"Photos: {len(image_paths)}")
 
 
+def normalized_page_text(driver: webdriver.Chrome) -> str:
+    try:
+        text = driver.find_element(By.TAG_NAME, "body").text
+    except Exception:
+        return ""
+    import unicodedata
+
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(char for char in text if unicodedata.category(char) != "Mn")
+    return text.replace("’", "'").lower()
+
+
+def check_account_restriction(driver: webdriver.Chrome) -> None:
+    """Se detiene si Facebook avisa de un limite o una restriccion.
+
+    Seguir llenando formularios despues de ese aviso es lo que convierte una
+    limitacion temporal en un bloqueo.
+    """
+    from marketplace_safety import RESTRICTION_PHRASES
+
+    text = normalized_page_text(driver)
+    url = str(getattr(driver, "current_url", "")).lower()
+    if "/checkpoint" in url:
+        raise AccountRestricted("Facebook pidio una verificacion de la cuenta (checkpoint).")
+    for phrase in RESTRICTION_PHRASES:
+        if phrase in text:
+            raise AccountRestricted(f"Facebook mostro un aviso de restriccion: \"{phrase}\".")
+
+
 def ensure_marketplace_session(driver: webdriver.Chrome) -> None:
     time.sleep(5)
     close_floating_panels(driver)
+    check_account_restriction(driver)
     current_url = driver.current_url
     body_text = driver.find_element(By.TAG_NAME, "body").text
     login_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='email'], input[type='password']")
@@ -1004,23 +1072,43 @@ def choose_dropdown_option(driver: webdriver.Chrome, label: str, value: str, att
     if dropdown_shows_value(driver, label, value):
         return True
     for attempt in range(1, attempts + 1):
+        prepare_window(driver)
         if dropdown_menu_open(driver):
             close_floating_panels(driver)
+            wait_menu_closed(driver)
         if not open_combobox(driver, label):
             return False
-        option = find_dropdown_option(driver, value)
+        option = wait_dropdown_option(driver, value, timeout=4)
         position: dict[str, Any] = {}
         if option is not None:
             position = click_like_a_person(driver, option)
         else:
             click_open_dropdown_option(driver, value)
-        # Facebook tarda en volver a dibujar el formulario despues de elegir.
-        if wait_dropdown_value(driver, label, value, timeout=5):
+        # Facebook tarda en volver a dibujar el formulario despues de elegir, y
+        # mas aun con diez fotos recien subidas.
+        if wait_dropdown_value(driver, label, value, timeout=10):
             return True
         log(f"{label}: intento {attempt} sin confirmar {value} (opcion encontrada: {option is not None}, clic: {position})")
+        time.sleep(1.5 * attempt)
     if dropdown_menu_open(driver):
         close_floating_panels(driver)
     return False
+
+
+def wait_dropdown_option(driver: webdriver.Chrome, value: str, timeout: float = 4):
+    end = time.time() + timeout
+    while time.time() < end:
+        option = find_dropdown_option(driver, value)
+        if option is not None:
+            return option
+        time.sleep(0.3)
+    return None
+
+
+def wait_menu_closed(driver: webdriver.Chrome, timeout: float = 3) -> None:
+    end = time.time() + timeout
+    while time.time() < end and dropdown_menu_open(driver):
+        time.sleep(0.25)
 
 
 def dropdown_menu_open(driver: webdriver.Chrome) -> bool:
@@ -1086,17 +1174,30 @@ def main() -> None:
         default=None,
         help="Archivo que se escribe justo antes de pulsar Publish para detectar resultados inciertos.",
     )
+    parser.add_argument("--account", default="", help="Clave de la cuenta, para sus limites y su historial de salud.")
     parser.add_argument("--start-maximized", action="store_true", default=True)
     args = parser.parse_args()
 
     driver = None
     stage = "read-product"
+    publishing = bool(args.publish and args.confirm_publish)
     try:
         product = read_product(args.excel, args.images_root, args.row_index)
         if args.category:
             product["category"] = args.category
         if args.condition:
             product["condition"] = args.condition
+
+        stage = "content-review"
+        from marketplace_safety import lint_listing
+
+        problems, warnings = lint_listing(product["title"], product["description"], product["price"], product["tags"])
+        for warning in warnings:
+            log(f"Aviso de contenido: {warning}")
+        if problems and publishing:
+            raise ContentRejected(" ".join(problems))
+        for problem in problems:
+            log(f"Contenido a corregir antes de publicar: {problem}")
 
         stage = "open-session"
         driver = chrome_driver(args)
@@ -1154,21 +1255,48 @@ def main() -> None:
             return
 
         stage = "publish"
+        check_account_restriction(driver)
         write_publish_intent(args.intent_file, driver, product)
         if not click_button(driver, "Publish"):
             raise RuntimeError("No pude presionar Publish.")
         stage = "publish-confirmation"
         verify_publish_result(driver)
+        time.sleep(3)
+        # Facebook a veces acepta el clic y enseguida avisa que el anuncio no se
+        # publico o que la cuenta llego a su limite.
+        check_account_restriction(driver)
         print(f"[marketplace-browser] [listing-url:{driver.current_url}]", flush=True)
         print("[marketplace-browser] [publish-confirmed]", flush=True)
         log("Publicacion confirmada por Facebook Marketplace.")
+        report_outcome(args.account, True, name=product["title"])
     except Exception as exc:
         screenshot = capture_failure(driver, stage, exc)
-        diagnostic = f"[error-code:{error_code(exc)}] stage={stage}"
+        code = error_code(exc)
+        diagnostic = f"[error-code:{code}] stage={stage}"
         if screenshot:
             diagnostic += f" screenshot={screenshot}"
         print(f"[marketplace-browser] {diagnostic}", file=sys.stderr, flush=True)
+        # Las pruebas sin publicar no cuentan como fallos de la cuenta, pero un
+        # aviso de restriccion pausa la cuenta siempre.
+        if publishing or code == "ACCOUNT_RESTRICTED":
+            report_outcome(args.account, False, code=code, detail=str(exc))
         raise
+
+
+def report_outcome(account: str, success: bool, code: str = "", detail: str = "", name: str = "") -> None:
+    if not account:
+        return
+    try:
+        from marketplace_safety import record_publication, register_outcome
+        from marketplace_storage import MarketplaceStore, default_db_path
+
+        store = MarketplaceStore(default_db_path())
+        if success:
+            record_publication(store, account, name, "publicador")
+        else:
+            register_outcome(store, account, False, code, detail[:300])
+    except Exception as exc:  # noqa: BLE001 - el anuncio ya se publico; no se debe marcar como fallido.
+        log(f"No pude registrar el resultado en la proteccion de cuenta: {exc}")
 
 
 if __name__ == "__main__":

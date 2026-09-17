@@ -171,7 +171,47 @@ def test_generate_week_publica_en_todas_las_cuentas_y_separa_los_horarios(store,
     assert {item["account"] for item in cola} == {"cuenta1", "cuenta2"}
     primero = datetime.fromisoformat(cola[0]["scheduled_at"])
     segundo = datetime.fromisoformat(cola[1]["scheduled_at"])
+    # Con la proteccion activa las cuentas se reparten dentro del intervalo
+    # (180 min, 2 cuentas): 85 min entre una y otra, no 7.
+    assert segundo - primero == timedelta(minutes=85)
+
+
+def test_sin_proteccion_las_cuentas_se_separan_siete_minutos(store, catalogo):
+    from marketplace_safety import save_safety
+
+    save_safety(store, {"enabled": False})
+    catalogo(familias=4)
+    config = base_config(
+        accounts=["cuenta1", "cuenta2"], account_strategy="all_accounts",
+        horizon_days=1, max_per_day=1, cooldown_days=0, slot_jitter_minutes=0,
+    )
+    generate_week(store, config, start_date=date.today() + timedelta(days=1))
+    cola = sorted(store.list_queue(), key=lambda item: item["scheduled_at"])
+    primero = datetime.fromisoformat(cola[0]["scheduled_at"])
+    segundo = datetime.fromisoformat(cola[1]["scheduled_at"])
     assert segundo - primero == timedelta(minutes=7)
+
+
+def test_la_proteccion_limita_los_anuncios_por_cuenta_al_dia(store, catalogo):
+    from marketplace_safety import save_safety
+
+    save_safety(store, {"max_per_account_day": 2, "warmup_enabled": False})
+    catalogo(familias=6)
+    config = base_config(
+        accounts=["cuenta1"], horizon_days=1, max_per_day=5, interval_minutes=60, cooldown_days=0,
+    )
+    generate_week(store, config, start_date=date.today() + timedelta(days=1))
+    assert len(store.list_queue()) == 2
+
+
+def test_cuenta_en_calentamiento_recibe_un_anuncio_al_dia(store, catalogo):
+    catalogo(familias=6)
+    config = base_config(
+        accounts=["cuenta1"], horizon_days=2, max_per_day=5, interval_minutes=60, cooldown_days=0,
+    )
+    generate_week(store, config, start_date=date.today() + timedelta(days=1))
+    dias = [item["scheduled_at"][:10] for item in store.list_queue()]
+    assert len(dias) == 2 and len(set(dias)) == 2
 
 
 def test_generate_week_en_modo_autonomo_deja_todo_aprobado(store, catalogo):

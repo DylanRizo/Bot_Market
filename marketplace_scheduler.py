@@ -9,6 +9,7 @@ from typing import Any
 
 from marketplace_catalog import ASSISTANT_PRESETS, build_family_jobs, catalog_families
 from marketplace_custom_products import custom_rotation_jobs
+from marketplace_safety import load_safety, warmup_cap
 from marketplace_storage import DEFAULT_DB, MarketplaceStore, listing_fingerprint
 
 
@@ -201,6 +202,13 @@ def generate_week(
     start_date: date | None = None,
 ) -> dict[str, Any]:
     config = normalize_config(config or load_config(store))
+    safety = load_safety(store)
+    # Con la proteccion activa, repetir un producto en la misma cuenta espera al
+    # menos lo que marca la proteccion: dos anuncios iguales activos a la vez son
+    # lo primero que Marketplace marca como duplicado.
+    cooldown_days = config["cooldown_days"]
+    if safety["enabled"]:
+        cooldown_days = max(cooldown_days, safety["family_repeat_days"])
     family_jobs = build_family_jobs(
         config["account"], config["selected_families"], config.get("family_modes"), CAMPAIGN_PATH
     ) + custom_rotation_jobs(store)
@@ -220,7 +228,16 @@ def generate_week(
                 continue
     existing = store.list_queue(statuses=["planned", "queued", "running", "retry", "published"], limit=2000)
     reserved_media: set[tuple[str, str]] = set()
+    per_account_day: dict[tuple[str, str], int] = {}
+    first_publication = {account: store.first_publish_event(account) for account in config["accounts"]}
+
+    def day_cap(account: str, moment: datetime) -> int:
+        # Una cuenta sin historial cuenta su calentamiento desde su primer anuncio.
+        cap = warmup_cap(first_publication.get(account) or moment.isoformat(), safety, moment)
+        return safety["max_per_account_day"] if cap is None else cap
     for item in existing:
+        day_key = (item["account"], str(item.get("scheduled_at") or "")[:10])
+        per_account_day[day_key] = per_account_day.get(day_key, 0) + 1
         family = item.get("family_key") or ""
         if not family:
             continue
@@ -262,10 +279,14 @@ def generate_week(
                 account_candidate = job_for_account(candidate, account, config)
                 images = store.job_image_paths(account_candidate)
                 used_at = last_used.get((account, family))
-                cooldown_ok = used_at is None or slot - used_at >= timedelta(days=config["cooldown_days"])
+                cooldown_ok = used_at is None or slot - used_at >= timedelta(days=cooldown_days)
+                day_full = (
+                    safety["enabled"]
+                    and per_account_day.get((account, slot.date().isoformat()), 0) >= day_cap(account, slot)
+                )
                 published_conflict = bool(store.media_conflicts(account, images))
                 reserved_conflict = any((account, store.image_hash(image)) in reserved_media for image in images)
-                if cooldown_ok and not published_conflict and not reserved_conflict:
+                if cooldown_ok and not day_full and not published_conflict and not reserved_conflict:
                     eligible_accounts.append(account)
             if eligible_accounts:
                 selected = candidate
@@ -276,8 +297,14 @@ def generate_week(
             skipped_slots += 1
             continue
         family = str(selected.get("family_key") or "")
+        # El mismo producto en varias cuentas a minutos de diferencia parece una
+        # campana coordinada. Se reparte dentro del intervalo del espacio.
+        stagger = 7
+        if safety["enabled"] and len(selected_accounts) > 1:
+            room = max(7, (config["interval_minutes"] - 10) // len(selected_accounts))
+            stagger = min(max(7, safety["cross_account_gap_minutes"]), room)
         for account_index, account in enumerate(selected_accounts):
-            account_slot = slot + timedelta(minutes=account_index * 7)
+            account_slot = slot + timedelta(minutes=account_index * stagger)
             scheduled_text = account_slot.isoformat(timespec="seconds")
             account_job = job_for_account(selected, account, config)
             fingerprint = listing_fingerprint(account_job, account)
@@ -298,6 +325,8 @@ def generate_week(
             )
             if was_created:
                 created.append(queue_id)
+                day_key = (account, account_slot.date().isoformat())
+                per_account_day[day_key] = per_account_day.get(day_key, 0) + 1
                 last_used[(account, family)] = account_slot
                 for image in store.job_image_paths(account_job):
                     reserved_media.add((account, store.image_hash(image)))

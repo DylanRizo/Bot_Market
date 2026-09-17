@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -100,7 +101,40 @@ def join_human(values: list[str]) -> str:
     return ", ".join(values[:-1]) + f" y {values[-1]}"
 
 
-def listing_intro(base: str) -> str:
+def pick_variant(seed: str, options: list[str], salt: str = "") -> str:
+    """Elige una opcion estable para la semilla (cuenta y semana).
+
+    Sin semilla devuelve siempre la primera: los anuncios manuales no cambian.
+    """
+    if not seed or len(options) == 1:
+        return options[0]
+    digest = hashlib.sha256(f"{seed}|{salt}".encode("utf-8")).digest()
+    return options[digest[0] % len(options)]
+
+
+CLOSING_LINES = [
+    "Escribeme para confirmar {what} y coordinar la entrega.",
+    "Mandame mensaje con {what} y te confirmo disponibilidad.",
+    "Consulta disponibilidad de {what} por mensaje; coordinamos la entrega.",
+]
+
+
+def closing_line(what: str, seed: str = "") -> str:
+    return pick_variant(seed, CLOSING_LINES, "cierre").format(what=what)
+
+
+def listing_intro(base: str, seed: str = "") -> str:
+    intro = _listing_intro(base)
+    if not seed:
+        return intro
+    return pick_variant(
+        seed,
+        [intro, f"{intro} Producto nuevo, listo para entrega.", f"Disponible: {base.lower()}. {intro}"],
+        "intro",
+    )
+
+
+def _listing_intro(base: str) -> str:
     lower = base.lower()
     if "muñequera" in lower or "munequera" in lower:
         return "Muñequeras deportivas ideales para entrenar con mayor comodidad y soporte en rutinas de fuerza o gimnasio."
@@ -120,6 +154,14 @@ def listing_intro(base: str) -> str:
         return f"{base} nueva, comoda para entrenar con libertad de movimiento."
     if "camisa de compresion" in lower or "compresión" in lower:
         return f"{base} nueva, perfecta para entrenar, usar bajo otra prenda o armar un outfit deportivo."
+    if "falda" in lower:
+        return f"{base} nueva, comoda para entrenar o armar un look deportivo."
+    if "top" in lower.split():
+        return f"{base} nuevo, con buen soporte para entrenar y combinar con leggins o shorts."
+    if any(word in lower for word in ("calcetas", "rodilleras")):
+        return f"{base} nuevas, ideales para entrenar o para uso diario."
+    if any(word in lower for word in ("camisa", "calceta", "manga para brazo", "mochila", "rodillera")):
+        return f"{base} nueva, ideal para entrenar o para uso diario."
     return f"{base} nuevo, ideal para uso diario o para completar tu estilo."
 
 
@@ -246,13 +288,13 @@ def select_rows(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
     return selected
 
 
-def public_description_for_single(row: pd.Series) -> str:
+def public_description_for_single(row: pd.Series, seed: str = "") -> str:
     title = text_value(row.get("Titulo"))
     parsed = parse_title(title)
     price = price_number(row.get("Precio"))
     location = text_value(row.get("Ubicacion")) or "Managua, Nicaragua"
     lines = [
-        listing_intro(title),
+        listing_intro(title, seed),
     ]
     if parsed["size"]:
         lines.append(f"Talla: {parsed['size']}.")
@@ -262,7 +304,7 @@ def public_description_for_single(row: pd.Series) -> str:
         [
             f"Precio: {price_text(price)}.",
             f"Ubicacion: {location}.",
-            "Escribeme para confirmar disponibilidad y coordinar la entrega.",
+            closing_line("disponibilidad", seed),
         ]
     )
     return "\n".join(line for line in lines if line)
@@ -277,13 +319,14 @@ def row_to_public_listing(
     ai_enabled: bool,
     ai_model: str,
     ai_tone: str,
+    seed: str = "",
 ) -> tuple[dict[str, Any], str]:
     folder, images = validate_images(images_root, text_value(row.get("CarpetaImg")), text_value(row.get("NombreImg")) or "foto_1")
     title = text_value(row.get("Titulo"))
     parsed = parse_title(title)
     price = price_number(row.get("Precio"))
     location = text_value(row.get("Ubicacion")) or "Managua, Nicaragua"
-    fallback = public_description_for_single(row)
+    fallback = public_description_for_single(row, seed)
     description, source = generate_sales_description(
         {
             "titulo": title,
@@ -333,7 +376,7 @@ def group_key(row: pd.Series, mode: str) -> tuple[str, str]:
     return ("grouped", "all")
 
 
-def grouped_title(rows: pd.DataFrame, mode: str, fallback_name: str) -> str:
+def grouped_title(rows: pd.DataFrame, mode: str, fallback_name: str, seed: str = "") -> str:
     parsed_rows = [parse_title(text_value(row.get("Titulo"))) for _, row in rows.iterrows()]
     bases = [parsed["base"] for parsed in parsed_rows if parsed["base"]]
     base = bases[0] if bases else fallback_name
@@ -344,6 +387,18 @@ def grouped_title(rows: pd.DataFrame, mode: str, fallback_name: str) -> str:
         return f"{base} - {colors}" + (f" ({sizes})" if sizes else "")
     if mode == "grouped_by_size" and sizes:
         return f"{base} - Talla {sizes}" + (f" ({colors})" if colors else "")
+    if seed and colors and sizes:
+        size_list = sort_sizes([parsed["size"] for parsed in parsed_rows])
+        size_range = f"{size_list[0]} a {size_list[-1]}" if len(size_list) > 1 else size_list[0]
+        return pick_variant(
+            seed,
+            [
+                f"{base} - {colors} ({sizes})",
+                f"{base} | Tallas {size_range} | {colors}",
+                f"{base} en {colors} - Tallas {sizes}",
+            ],
+            "titulo",
+        )
     pieces = []
     if colors:
         pieces.append(colors)
@@ -352,14 +407,15 @@ def grouped_title(rows: pd.DataFrame, mode: str, fallback_name: str) -> str:
     return f"{base} - {' '.join(pieces)}".strip(" -") if pieces else fallback_name
 
 
-def grouped_description(rows: pd.DataFrame, title: str) -> str:
+def grouped_description(rows: pd.DataFrame, title: str, seed: str = "") -> str:
     parsed_rows = [parse_title(text_value(row.get("Titulo"))) for _, row in rows.iterrows()]
     colors = join_human([parsed["color"] for parsed in parsed_rows])
     sizes = ", ".join(sort_sizes([parsed["size"] for parsed in parsed_rows]))
     prices = [price_number(row.get("Precio")) for _, row in rows.iterrows() if price_number(row.get("Precio"))]
     unique_prices = sorted(set(prices))
     location = text_value(rows.iloc[0].get("Ubicacion")) or "Managua, Nicaragua"
-    base = parse_title(title)["base"] or title
+    # Los titulos variados separan con "|" o " en " en lugar de " - ".
+    base = re.split(r" \| | en (?=[A-Z])", parse_title(title)["base"] or title)[0].strip() or title
 
     if len(unique_prices) <= 1:
         price_line = f"Precio: {price_text(unique_prices[0] if unique_prices else 0)} cada uno."
@@ -367,7 +423,7 @@ def grouped_description(rows: pd.DataFrame, title: str) -> str:
         price_line = f"Precio desde {price_text(unique_prices[0])}, segun variante."
 
     lines = [
-        listing_intro(base),
+        listing_intro(base, seed),
     ]
     if colors:
         lines.append(f"Colores disponibles: {colors}.")
@@ -377,7 +433,7 @@ def grouped_description(rows: pd.DataFrame, title: str) -> str:
         [
             price_line,
             f"Ubicacion: {location}.",
-            f"Escribeme para confirmar {' y '.join(value for value in ['color' if colors else '', 'talla' if sizes else ''] if value) or 'la variante'} y coordinar la entrega.",
+            closing_line(" y ".join(value for value in ["color" if colors else "", "talla" if sizes else ""] if value) or "la variante", seed),
         ]
     )
     return "\n".join(line for line in lines if line)
@@ -393,6 +449,7 @@ def group_to_public_listing(
     ai_enabled: bool,
     ai_model: str,
     ai_tone: str,
+    seed: str = "",
 ) -> tuple[dict[str, Any], str]:
     folders: list[str] = []
     images: list[str] = []
@@ -406,7 +463,7 @@ def group_to_public_listing(
     colors = join_human([parsed["color"] for parsed in parsed_rows])
     sizes = ", ".join(sort_sizes([parsed["size"] for parsed in parsed_rows]))
     location = text_value(rows.iloc[0].get("Ubicacion")) or "Managua, Nicaragua"
-    fallback = grouped_description(rows, title)
+    fallback = grouped_description(rows, title, seed)
     description, source = generate_sales_description(
         {
             "titulo": title,
@@ -470,6 +527,7 @@ def build_jobs(args: argparse.Namespace) -> list[dict[str, Any]]:
     price_override = price_number(args.price_override) if args.price_override else 0.0
     override_images = validated_override_images(args.image_paths_json)
     override_tags = validated_override_tags(args.tags_json)
+    seed = str(getattr(args, "variant_seed", "") or "")
 
     jobs: list[dict[str, Any]] = []
     if mode == "individual":
@@ -485,6 +543,7 @@ def build_jobs(args: argparse.Namespace) -> list[dict[str, Any]]:
                 ai_enabled=ai_enabled,
                 ai_model=ai_model,
                 ai_tone=ai_tone,
+                seed=seed,
             )
             apply_image_override(listing, override_images)
             apply_tags_override(listing, override_tags)
@@ -513,7 +572,7 @@ def build_jobs(args: argparse.Namespace) -> list[dict[str, Any]]:
         if price_override:
             group = group.copy()
             group["Precio"] = price_override
-        title = grouped_title(group, mode, args.name or f"listing_{index}")
+        title = grouped_title(group, mode, args.name or f"listing_{index}", seed)
         listing, description_source = group_to_public_listing(
             group,
             images_root,
@@ -523,6 +582,7 @@ def build_jobs(args: argparse.Namespace) -> list[dict[str, Any]]:
             ai_enabled=ai_enabled,
             ai_model=ai_model,
             ai_tone=ai_tone,
+            seed=seed,
         )
         apply_image_override(listing, override_images)
         apply_tags_override(listing, override_tags)
@@ -560,6 +620,7 @@ def main() -> None:
     parser.add_argument("--price-override", default="")
     parser.add_argument("--image-paths-json", default="")
     parser.add_argument("--tags-json", default="")
+    parser.add_argument("--variant-seed", default="", help="Cuenta y semana; cambia la redaccion entre cuentas.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 

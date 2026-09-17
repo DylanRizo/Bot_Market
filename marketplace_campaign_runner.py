@@ -13,6 +13,26 @@ from typing import Any
 from marketplace_runtime import AccountLock
 
 
+def safety_store():
+    """Almacen de la proteccion de cuenta, o None si no se puede abrir."""
+    try:
+        from marketplace_storage import MarketplaceStore, default_db_path
+
+        return MarketplaceStore(default_db_path())
+    except Exception as exc:  # noqa: BLE001 - sin base se publica igual que antes.
+        log(f"Proteccion de cuenta no disponible: {exc}")
+        return None
+
+
+def copy_variation_enabled() -> bool:
+    store = safety_store()
+    if store is None:
+        return False
+    from marketplace_safety import load_safety
+
+    return load_safety(store)["vary_copy"]
+
+
 SCRATCH_DIR = Path(__file__).resolve().parent
 AUTOMATOR = SCRATCH_DIR / "facebook_marketplace_browser_automator.py"
 LISTING_BUILDER = SCRATCH_DIR / "marketplace_listing_builder.py"
@@ -124,7 +144,13 @@ def builder_mode(job: dict[str, Any]) -> str:
     return str(mode)
 
 
-def build_dynamic_jobs(job: dict[str, Any], defaults: dict[str, Any], campaign_dir: Path) -> list[dict[str, Any]]:
+def build_dynamic_jobs(
+    job: dict[str, Any],
+    defaults: dict[str, Any],
+    campaign_dir: Path,
+    default_account: str = "",
+    vary_copy: bool = False,
+) -> list[dict[str, Any]]:
     mode = builder_mode(job)
     if not mode:
         return [job]
@@ -178,6 +204,12 @@ def build_dynamic_jobs(job: dict[str, Any], defaults: dict[str, Any], campaign_d
     tags = listing_overrides.get("tags") or []
     if tags:
         command.extend(["--tags-json", json.dumps(tags, ensure_ascii=False)])
+    account_key = str(job.get("account") or default_account or "")
+    if vary_copy and account_key:
+        # Misma cuenta y misma semana dan el mismo texto; otra cuenta u otra
+        # semana, otra redaccion. Asi dos cuentas no suben anuncios identicos.
+        week = datetime.now().isocalendar()
+        command.extend(["--variant-seed", f"{account_key}|{week[0]}-W{week[1]:02d}"])
     ai_enabled = bool(job.get("ai_descriptions", defaults.get("ai_descriptions", False)))
     if ai_enabled:
         command.append("--ai-descriptions")
@@ -212,13 +244,19 @@ def build_dynamic_jobs(job: dict[str, Any], defaults: dict[str, Any], campaign_d
     return expanded
 
 
-def expand_jobs(jobs: list[dict[str, Any]], defaults: dict[str, Any], campaign_dir: Path) -> list[dict[str, Any]]:
+def expand_jobs(
+    jobs: list[dict[str, Any]],
+    defaults: dict[str, Any],
+    campaign_dir: Path,
+    default_account: str = "",
+    vary_copy: bool = False,
+) -> list[dict[str, Any]]:
     expanded: list[dict[str, Any]] = []
     for job in jobs:
         if job.get("enabled", True) is False:
             expanded.append(job)
             continue
-        expanded.extend(build_dynamic_jobs(job, defaults, campaign_dir))
+        expanded.extend(build_dynamic_jobs(job, defaults, campaign_dir, default_account, vary_copy))
     return expanded
 
 
@@ -229,6 +267,7 @@ def build_command(
     campaign_dir: Path,
     confirm_publish: bool,
     advance_only: bool,
+    account_key: str = "",
 ) -> list[str]:
     excel = expand_path(job.get("excel"), campaign_dir)
     images_root = expand_path(job.get("images_root"), campaign_dir)
@@ -257,6 +296,8 @@ def build_command(
         "--condition",
         str(job.get("condition") or defaults.get("condition") or "New"),
     ]
+    if account_key:
+        command.extend(["--account", str(account_key)])
 
     bool_arg(command, bool(job.get("meet_public", defaults.get("meet_public", True))), "--meet-public")
     bool_arg(command, bool(job.get("door_pickup", defaults.get("door_pickup", True))), "--door-pickup")
@@ -304,7 +345,13 @@ def main() -> None:
     campaign = load_json(campaign_path)
     accounts = load_json(args.accounts).get("accounts", {})
     defaults = campaign.get("defaults", {})
-    jobs = expand_jobs(campaign.get("jobs", []), defaults, campaign_dir)
+    jobs = expand_jobs(
+        campaign.get("jobs", []),
+        defaults,
+        campaign_dir,
+        str(campaign.get("default_account") or ""),
+        vary_copy=not args.plan_only and copy_variation_enabled(),
+    )
     if not jobs:
         raise SystemExit("La campana no tiene jobs.")
 
@@ -347,9 +394,23 @@ def main() -> None:
             )
             update_activity(activity_path, activity_id, "planned", "Plan revisado; no se abrió Facebook.")
             continue
+        if args.confirm_publish:
+            store = safety_store()
+            if store is not None:
+                from marketplace_safety import check_can_publish
+
+                allowed, hold_code, hold_detail, retry_at = check_can_publish(store, str(account_key))
+                if not allowed:
+                    when = retry_at[:16].replace("T", " ") if retry_at else ""
+                    message = f"Proteccion de cuenta: {hold_detail} Podra publicar desde {when}."
+                    update_activity(activity_path, activity_id, "skipped", message)
+                    print(f"[marketplace-browser] [error-code:SAFETY_HOLD] {message}", file=sys.stderr, flush=True)
+                    raise SystemExit(f"Proteccion de cuenta ({hold_code}): {hold_detail}")
         update_activity(activity_path, activity_id, "running", "Preparando el anuncio en Facebook Marketplace.")
         log(f"Iniciando job {original_index}: {name} | cuenta={account_key}")
-        command = build_command(job, defaults, account, campaign_dir, args.confirm_publish, args.advance_only)
+        command = build_command(
+            job, defaults, account, campaign_dir, args.confirm_publish, args.advance_only, str(account_key)
+        )
         with AccountLock(str(account_key)):
             completed = subprocess.run(command, cwd=str(SCRATCH_DIR), text=True)
         if completed.returncode != 0:

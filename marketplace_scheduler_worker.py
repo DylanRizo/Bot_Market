@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from marketplace_safety import backfill_events, check_can_publish
 from marketplace_scheduler import generate_week, load_config
 from marketplace_storage import DEFAULT_DB, MarketplaceStore, now_iso
 
@@ -25,7 +26,13 @@ WORKER_JOBS_DIR = SCRATCH_DIR / "marketplace_worker_jobs"
 PUBLISH_INTENTS_DIR = SCRATCH_DIR / "marketplace_publish_intents"
 OPEN_SESSION_SCRIPT = SCRATCH_DIR / "abrir_sesion_marketplace_cuenta.ps1"
 
-BLOCKING_ERRORS = {"SESSION_BLOCKED", "PUBLISH_OUTCOME_UNKNOWN", "DATA_INVALID", "IMAGE_REUSED"}
+BLOCKING_ERRORS = {
+    "SESSION_BLOCKED", "PUBLISH_OUTCOME_UNKNOWN", "DATA_INVALID", "IMAGE_REUSED",
+    "ACCOUNT_RESTRICTED", "CONTENT_POLICY",
+}
+# La proteccion de cuenta frena el anuncio pero no es un fallo: se reprograma.
+SAFETY_HOLD_CODE = "SAFETY_HOLD"
+SAFETY_HOLD_RETRY_MINUTES = 60
 PUBLISHING_MODES = {"semiautomatic", "autonomous"}
 UNCERTAIN_PUBLISH_DETAIL = (
     "Se pulso Publish pero no hubo confirmacion. Revisa Marketplace antes de reintentar: "
@@ -148,7 +155,10 @@ def classify_failure(
     if publishing and code == "TIMEOUT":
         code = "PUBLISH_OUTCOME_UNKNOWN"
     lines = [line.strip() for line in output.splitlines() if line.strip()]
-    detail = lines[-1] if lines else f"El publicador termino con codigo {returncode}."
+    # El runner cierra con "Fallo el job 0: <titulo>", que no dice que paso. La
+    # linea ERROR del publicador si lo dice.
+    errors = [line.split("ERROR:", 1)[1].strip() for line in lines if "[marketplace-browser] ERROR:" in line]
+    detail = errors[-1] if errors else (lines[-1] if lines else f"El publicador termino con codigo {returncode}.")
     if timed_out:
         detail = f"El publicador no respondio en 10 minutos y se corto. {detail}"
     return code, detail[:1000]
@@ -290,6 +300,13 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
         log(f"Pendiente de aprobacion: {item['name']}")
         return
 
+    if publishing:
+        allowed, hold_code, hold_detail, retry_at = check_can_publish(store, item["account"])
+        if not allowed:
+            store.postpone(queue_id, retry_at, f"Esperando por proteccion de cuenta: {hold_detail}")
+            log(f"En espera {item['name']} | cuenta={item['account']} | {hold_code} hasta {retry_at}")
+            return
+
     attempt_id = store.begin_attempt(queue_id, item["attempts"])
     if store.publication_exists(item["account"], item["fingerprint"]):
         detail = "Omitido porque esta huella ya figura como publicada en la cuenta."
@@ -405,6 +422,12 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
     error_code, detail = classify_failure(
         output, completed.returncode, publishing=publishing, timed_out=timed_out
     )
+    if error_code == SAFETY_HOLD_CODE and not intent_path_for(queue_id).exists():
+        store.finish_attempt(attempt_id, "skipped", error_code, detail, output)
+        retry_at = datetime.fromtimestamp(time.time() + SAFETY_HOLD_RETRY_MINUTES * 60).isoformat(timespec="seconds")
+        store.postpone(queue_id, retry_at, detail)
+        log(f"En espera {item['name']}: {detail}")
+        return
     # Si quedo archivo de intencion, el clic en Publish ya salio. No importa como
     # haya fallado despues: reintentarlo crearia un segundo anuncio.
     if intent_path_for(queue_id).exists():
@@ -477,6 +500,10 @@ def main() -> None:
     args = parser.parse_args()
     store = MarketplaceStore(args.db)
     log(f"Trabajador iniciado. Base={store.path}")
+    try:
+        backfill_events(store, ACTIVITY_PATH)
+    except Exception as exc:  # noqa: BLE001 - sin historial los limites arrancan en cero.
+        log(f"No pude cargar el historial de publicaciones: {exc}")
     while True:
         try:
             worked = run_once(store)
@@ -484,9 +511,14 @@ def main() -> None:
             store.heartbeat("scheduler", {"status": "stopped"})
             raise
         except Exception as exc:
-            store.heartbeat("scheduler", {"status": "error", "error": str(exc)})
-            store.create_alert("critical", "WORKER_ERROR", str(exc))
             log(f"Error del trabajador: {exc}")
+            # Si la base falla (un "disk I/O error" pasajero), registrar el error
+            # tambien falla; el trabajador debe seguir vivo y reintentar.
+            try:
+                store.heartbeat("scheduler", {"status": "error", "error": str(exc)})
+                store.create_alert("critical", "WORKER_ERROR", str(exc))
+            except Exception as nested:  # noqa: BLE001
+                log(f"No pude registrar el error en la base: {nested}")
             worked = False
         if args.once:
             break

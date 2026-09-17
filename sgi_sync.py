@@ -47,6 +47,7 @@ STAGING_NAME = ".sgi-sync-tmp"
 FAMILY_NAMES = {
     "BOL": "Bolso deportivo",
     "BSH": "Camisa Bershka",
+    "BSK": "Camisa Bersek",
     "CAL": "Calcetas de compresion",
     "CHA": "Chaleco de lana sin mangas",
     "CIN": "Cinturon de gimnasio",
@@ -54,7 +55,9 @@ FAMILY_NAMES = {
     "CMP": "Camisa de compresion manga corta",
     "CSM": "Camisa sin mangas",
     "DUR": "Durag",
+    "ENL": "Enterizo largo deportivo",
     "ENT": "Enterizo deportivo",
+    "FAL": "Falda deportiva",
     "JOG": "Pantalon jogger",
     "LEG": "Leggins deportivos",
     "MAN": "Manga para brazo",
@@ -62,6 +65,7 @@ FAMILY_NAMES = {
     "MUN": "Munequeras deportivas",
     "ROD": "Rodilleras deportivas",
     "SHT": "Short deportivo",
+    "SHYLA": "Short deportivo YoungLA",
     "STR": "Straps para gimnasio",
     "TOP": "Top deportivo",
 }

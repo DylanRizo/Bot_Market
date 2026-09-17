@@ -228,6 +228,20 @@ class MarketplaceStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                -- Cada anuncio que Facebook confirmo, venga del calendario o de una
+                -- campana manual. Los limites por cuenta se cuentan aqui porque el
+                -- historial de actividad se puede borrar desde el panel.
+                CREATE TABLE IF NOT EXISTS publish_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    published_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_publish_events_account
+                    ON publish_events(account, published_at);
                 """
             )
 
@@ -430,10 +444,12 @@ class MarketplaceStore:
             raise KeyError(queue_id)
         timestamp = now_iso()
         with self.transaction(immediate=True) as connection:
+            # El detalle se reescribe: si antes hubo un intento fallido, el
+            # calendario seguia mostrando ese error junto a "Publicada".
             connection.execute(
                 """UPDATE queue SET status='published', listing_url=?, published_at=?,
-                   finished_at=?, updated_at=? WHERE id=?""",
-                (listing_url, timestamp, timestamp, timestamp, queue_id),
+                   finished_at=?, updated_at=?, detail=? WHERE id=?""",
+                (listing_url, timestamp, timestamp, timestamp, "Publicada en Marketplace.", queue_id),
             )
             connection.execute(
                 """INSERT OR IGNORE INTO publications(
@@ -604,6 +620,42 @@ class MarketplaceStore:
         wait = self.retry_delay_minutes(delay_minutes, item["attempts"])
         retry_at = (datetime.now() + timedelta(minutes=wait)).isoformat(timespec="seconds")
         self.update_queue_item(queue_id, status="retry", next_attempt_at=retry_at, detail=detail)
+
+    def postpone(self, queue_id: str, next_attempt_at: str, detail: str) -> None:
+        """Devuelve a la cola un trabajo ya reclamado sin gastarle un intento.
+
+        Lo usa la proteccion de cuenta: esperar a que pase el limite diario no es
+        un fallo del anuncio y no debe acercarlo a quedar bloqueado.
+        """
+        with self.connect() as connection:
+            connection.execute(
+                """UPDATE queue SET status='queued', attempts=MAX(attempts-1, 0), next_attempt_at=?,
+                   detail=?, started_at=NULL, updated_at=? WHERE id=?""",
+                (next_attempt_at, detail[:1000], now_iso(), queue_id),
+            )
+
+    def record_publish_event(self, account: str, name: str = "", source: str = "", at: str | None = None) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO publish_events(account, name, source, published_at) VALUES (?, ?, ?, ?)",
+                (account, name[:200], source, at or now_iso()),
+            )
+
+    def publish_events(self, account: str, since: str) -> list[str]:
+        """Fechas de publicacion de la cuenta desde ``since``, de la mas antigua a la mas nueva."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT published_at FROM publish_events WHERE account=? AND published_at >= ? ORDER BY published_at",
+                (account, since),
+            ).fetchall()
+        return [str(row["published_at"]) for row in rows]
+
+    def first_publish_event(self, account: str) -> str:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT MIN(published_at) AS first_at FROM publish_events WHERE account=?", (account,)
+            ).fetchone()
+        return str(row["first_at"] or "") if row else ""
 
     def recover_stale(
         self,

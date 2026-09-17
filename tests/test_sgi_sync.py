@@ -52,7 +52,7 @@ def test_los_presets_reconocen_el_sku_nuevo_sin_mezclar_familias():
     assert preset_matches_row(ASSISTANT_PRESETS["compression_short"], row)
     assert not preset_matches_row(ASSISTANT_PRESETS["compression_sleeveless"], row)
     assert not preset_matches_row(ASSISTANT_PRESETS["compression_long"], row)
-    assert category_for_sku("BOL-NEG-U") == "Sports & Outdoors"
+    assert category_for_sku("BOL-NEG-U") == "Bags & Luggage"
     assert category_for_sku("CMP-NEG-M") == "Men's clothing & shoes"
 
 

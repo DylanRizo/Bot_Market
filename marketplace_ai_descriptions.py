@@ -88,13 +88,16 @@ def sanitize_description(text: str, fallback: str) -> str:
 
 
 def sanitize_tags(value: Any, fallback: list[str] | None = None) -> list[str]:
-    raw_values = value if isinstance(value, list) else re.split(r"[,;\n]", str(value or ""))
+    raw_values = value if isinstance(value, list) else [value]
+    # Facebook no acepta comas dentro de una etiqueta: "S, M, L" se rechazaba entera.
+    pieces = [piece for raw in raw_values for piece in re.split(r"[,;|\n]", str(raw or ""))]
     tags: list[str] = []
     seen: set[str] = set()
-    for raw in raw_values:
+    for raw in pieces:
         tag = re.sub(r"\s+", " ", str(raw or "").replace("#", "").strip(" .,-"))
         lowered = tag.lower()
-        if not tag or len(tag) > 48 or lowered in seen:
+        # Las tallas sueltas (S, M, XL) no son terminos de busqueda utiles.
+        if len(tag) < 3 or len(tag) > 48 or lowered in seen:
             continue
         if re.search(r"\bsku\b|\bstock\b|\bexistencias?\b|\bc\$|\bnio\b", lowered):
             continue
@@ -108,7 +111,8 @@ def sanitize_tags(value: Any, fallback: list[str] | None = None) -> list[str]:
 def local_product_tags(facts: dict[str, Any]) -> list[str]:
     title = str(facts.get("titulo") or "").strip()
     lowered = title.lower()
-    values: list[str] = [title]
+    # Solo el nombre del producto: los colores se agregan aparte.
+    values: list[str] = [re.split(r" - | \| | en (?=[A-Z])", title)[0].strip() or title]
     has_product_type = False
     if "compres" in lowered:
         has_product_type = True
@@ -136,7 +140,7 @@ def local_product_tags(facts: dict[str, Any]) -> list[str]:
         values.extend(["straps para gimnasio", "accesorios de gimnasio", "entrenamiento", "fitness"])
     else:
         values.extend(["ropa deportiva", "gimnasio", "entrenamiento"])
-    keys = ("color", "colores", "talla", "tallas", "estilo")
+    keys = ("color", "colores", "estilo")
     if not has_product_type:
         keys = (*keys, "uso")
     for key in keys:

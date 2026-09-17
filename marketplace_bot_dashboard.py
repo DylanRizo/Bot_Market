@@ -26,6 +26,15 @@ import pandas as pd
 from marketplace_catalog import ASSISTANT_PRESETS, STYLE_TO_MODE
 from marketplace_custom_products import CUSTOM_ROOT, create_custom_product
 from marketplace_runtime import process_exists
+from marketplace_safety import (
+    LEVELS as SAFETY_LEVELS,
+    backfill_events,
+    health_snapshot,
+    load_safety,
+    pause_account,
+    resume_account,
+    save_safety,
+)
 from marketplace_scheduler import (
     approve_items,
     cancel_future,
@@ -72,6 +81,7 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SESSION_TOKEN = ""
 STORE = MarketplaceStore(default_db_path())
 STORE.migrate_activity(ACTIVITY_PATH)
+backfill_events(STORE, ACTIVITY_PATH)
 
 SGI_DRIVE_TOKEN_PATH = SCRATCH_DIR / "token_google_drive.json"
 SGI_REPORT_PATH = SCRATCH_DIR / "sgi_sync_report.json"
@@ -239,8 +249,12 @@ def autonomy_payload() -> dict[str, Any]:
                 descriptors.append(descriptor)
             if descriptors:
                 photo_assignments[account][family] = descriptors
+    account_keys = list(json_load(ACCOUNTS_PATH, {"accounts": {}}).get("accounts", {}))
     return {
         "config": config,
+        "safety": load_safety(STORE),
+        "safety_levels": SAFETY_LEVELS,
+        "health": health_snapshot(STORE, account_keys),
         "queue": STORE.list_queue(limit=500),
         "summary": STORE.summary(),
         "report": STORE.report(7),
@@ -1044,6 +1058,35 @@ class DashboardHandler(BaseHTTPRequestHandler):
         STORE.resolve_alert(str(payload.get("id") or ""))
         self.send_json({"ok": True, "autonomy": autonomy_payload()})
 
+    def _post_safety_config(self) -> None:
+        """POST /api/safety/config"""
+        payload = self.read_json()
+        save_safety(STORE, dict(payload.get("safety") or {}))
+        self.send_json({"ok": True, "autonomy": autonomy_payload()})
+
+    def _post_safety_pause(self) -> None:
+        """POST /api/safety/pause"""
+        payload = self.read_json()
+        account = str(payload.get("account") or "")
+        accounts = json_load(ACCOUNTS_PATH, {"accounts": {}}).get("accounts", {})
+        if account not in accounts:
+            raise ValueError("Esa cuenta no existe.")
+        hours = max(1, min(int(payload.get("hours") or 24), 24 * 30))
+        pause_account(STORE, account, hours, "Pausa manual desde el panel.", "MANUAL_PAUSE")
+        self.send_json({"ok": True, "autonomy": autonomy_payload()})
+
+    def _post_safety_resume(self) -> None:
+        """POST /api/safety/resume"""
+        payload = self.read_json()
+        resume_account(STORE, str(payload.get("account") or ""))
+        self.send_json({"ok": True, "autonomy": autonomy_payload()})
+
+    def _post_autonomy_alert_resolve_all(self) -> None:
+        """POST /api/autonomy/alert/resolve-all"""
+        for alert in STORE.list_alerts(limit=500):
+            STORE.resolve_alert(alert["id"])
+        self.send_json({"ok": True, "autonomy": autonomy_payload()})
+
     def _post_autonomy_worker_start(self) -> None:
         """POST /api/autonomy/worker/start"""
         pid = start_worker()
@@ -1218,6 +1261,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         "/api/autonomy/approve": _post_autonomy_approve,
         "/api/autonomy/item": _post_autonomy_item,
         "/api/autonomy/alert/resolve": _post_autonomy_alert_resolve,
+        "/api/autonomy/alert/resolve-all": _post_autonomy_alert_resolve_all,
+        "/api/safety/config": _post_safety_config,
+        "/api/safety/pause": _post_safety_pause,
+        "/api/safety/resume": _post_safety_resume,
         "/api/autonomy/worker/start": _post_autonomy_worker_start,
         "/api/autonomy/worker/stop": _post_autonomy_worker_stop,
         "/api/assistant/apply": _post_assistant_apply,
@@ -1254,8 +1301,14 @@ def main() -> None:
             "Si de verdad lo necesitas, agrega --allow-remote."
         )
 
+    # En Windows SO_REUSEADDR deja que un segundo panel escuche en el mismo
+    # puerto: los dos atendian peticiones y el segundo reescribia el token del
+    # primero. Sin reutilizar, el segundo arranque falla y el primero sigue.
+    class SingleDashboardServer(ThreadingHTTPServer):
+        allow_reuse_address = os.name != "nt"
+
+    server = SingleDashboardServer((args.host, args.port), DashboardHandler)
     token = issue_session_token()
-    server = ThreadingHTTPServer((args.host, args.port), DashboardHandler)
     url = f"http://{args.host}:{args.port}/?token={token}"
     print(f"Marketplace Bot Dashboard: {url}", flush=True)
     print(f"Token de la sesion guardado en: {DASHBOARD_TOKEN_PATH}", flush=True)

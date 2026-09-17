@@ -527,7 +527,7 @@
     }
     .calendar-item strong { display: block; margin: 3px 0; font-size: 12px; }
     .calendar-item input { width: 100%; margin-top: 6px; font-size: 11px; padding: 5px; }
-    .calendar-actions { display: flex; gap: 4px; margin-top: 6px; }
+    .calendar-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
     .calendar-actions button { padding: 5px 7px; font-size: 11px; }
     .alert-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
     .alert-row:last-child { border-bottom: 0; }
@@ -627,4 +627,95 @@
       .activity-table th:nth-child(4), .activity-table td:nth-child(4) { display: none; }
       .autonomy-top { align-items: flex-start; flex-direction: column; }
       .custom-form > div, .custom-form .wide { grid-column: 1 / -1; }
+    }
+
+    /* --- Proteccion de cuenta y estado ------------------------------------- */
+    .rules-card-wide { grid-column: 1 / -1; }
+    .safety-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; }
+    .safety-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .safety-toggles { display: grid; gap: 6px; }
+    .toggle-line { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; flex-wrap: wrap; }
+    .toggle-line small { color: var(--muted); font-weight: 400; }
+    .toggle-line input, .segmented input { width: 16px; height: 16px; min-height: 16px; margin: 0; accent-color: var(--blue); flex: none; }
+    .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .segmented label { display: flex; align-items: center; gap: 5px; padding: 6px 10px; font-size: 12px; cursor: pointer; border-right: 1px solid var(--line); }
+    .segmented label:last-child { border-right: 0; }
+    .segmented label:has(input:checked) { background: var(--blue-soft); color: var(--blue-dark); font-weight: 700; }
+    .warn-text { color: var(--yellow) !important; }
+
+    .checklist {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--yellow);
+      border-radius: 10px;
+      background: var(--yellow-soft);
+      padding: 12px 16px;
+      margin: 0 0 18px;
+      font-size: 13px;
+    }
+    .checklist.ready { border-left-color: var(--green); background: var(--green-soft); }
+    .checklist ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; }
+    .checklist li { padding-left: 22px; position: relative; line-height: 1.45; }
+    .checklist li::before { position: absolute; left: 0; top: 0; font-weight: 800; }
+    .checklist li.done { color: var(--muted); }
+    .checklist li.done::before { content: "\2713"; color: var(--green); }
+    .checklist li.todo { color: var(--text); font-weight: 600; }
+    .checklist li.todo::before { content: "!"; color: var(--yellow); width: 14px; text-align: center; }
+
+    .health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+    .health-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: #fff; display: grid; gap: 8px; }
+    .health-card header { all: unset; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .health-tag { border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .health-tag.ok { background: var(--green-soft); color: var(--green); }
+    .health-tag.info { background: var(--blue-soft); color: var(--blue-dark); }
+    .health-tag.danger { background: #fdecea; color: var(--red); }
+    .health-meter { height: 6px; background: #eef1f4; border-radius: 99px; overflow: hidden; }
+    .health-meter span { display: block; height: 100%; background: var(--blue); }
+    .health-numbers { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+    .health-numbers b { color: var(--text); }
+    .health-note { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
+    .health-card .toolbar button { min-height: 30px; font-size: 12px; }
+
+    .approval-banner {
+      margin: 0 0 12px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid #f1d39b;
+      background: var(--yellow-soft);
+      font-size: 13px;
+    }
+    .alert-row.severity-critical { border-left: 3px solid var(--red); padding-left: 10px; }
+    .alert-row.severity-warning { border-left: 3px solid var(--yellow); padding-left: 10px; }
+    .alert-row .muted { font-size: 12px; margin-left: 6px; }
+    .alert-advice { display: inline-block; margin-top: 4px; font-size: 12px; color: var(--blue-dark); }
+    .plain-list { margin: 6px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.5; }
+
+    .calendar-item.calendar-planned { border-left-color: var(--yellow); background: #fffaf0; }
+    .calendar-item.calendar-published { border-left-color: var(--green); background: var(--green-soft); }
+    .calendar-item.calendar-blocked { border-left-color: var(--red); background: #fdf1f0; }
+    .calendar-item.calendar-retry { border-left-color: var(--yellow); }
+    .calendar-detail { display: block; margin-top: 4px; color: var(--muted); line-height: 1.35; }
+
+    details.fold > summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    details.fold > summary::-webkit-details-marker { display: none; }
+    details.fold > summary::after { content: "Mostrar"; margin-left: auto; font-size: 12px; color: var(--blue); font-weight: 600; }
+    details.fold[open] > summary::after { content: "Ocultar"; }
+    details.fold > summary h3 { margin: 0; }
+    details.fold > summary .step-label { width: 100%; }
+    details.fold[open] > summary { margin-bottom: 12px; }
+    .fold-actions { margin-bottom: 10px; }
+
+    @media (max-width: 980px) {
+      .safety-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .checklist ul { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .safety-grid, .field-pair { grid-template-columns: 1fr; }
+      .segmented { flex-wrap: wrap; }
     }

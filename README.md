@@ -27,6 +27,17 @@ cuentas de Marketplace y la necesidad de publicar sin estar delante.
 - **Trabajador permanente.** Corre como tarea de Windows: el calendario avanza
   aunque el panel este cerrado, y sobrevive a reinicios.
 
+- **Proteccion de cuenta.** Antes de cada anuncio real revisa limites por cuenta
+  (al dia, en 7 dias y separacion minima), aplica un calentamiento a las cuentas
+  que recien empiezan a vender (1 anuncio al dia la primera semana, 2 la
+  segunda), espera dias antes de repetir un producto en la misma cuenta, separa
+  las cuentas entre si y varia titulo y descripcion por cuenta. Si Facebook
+  muestra un aviso de limite o restriccion, pausa la cuenta 72 horas; tras
+  fallos seguidos la deja descansar 12. Tambien bloquea anuncios con enlaces o
+  correos y avisa de telefonos, mayusculas y titulos largos. Lo que frena la
+  proteccion se reprograma sin gastar intentos. Se configura en
+  `Automatizacion > Reglas > Proteccion de cuenta` (`marketplace_safety.py`).
+
 Nunca guarda la contrasena de Facebook: reutiliza un perfil de Chrome con la
 sesion ya iniciada. Captchas, 2FA y revisiones de cuenta detienen esa cuenta y
 piden intervencion humana.

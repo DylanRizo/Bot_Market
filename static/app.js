@@ -201,6 +201,17 @@
       const lines = [
         `<p><strong>${slots} espacios por semana:</strong> hasta ${perDay} por día durante ${rules.days} ${rules.days === 1 ? "día" : "días"}, entre ${escapeHtml($("autoStart").value)} y ${escapeHtml($("autoEnd").value)}.</p>`,
       ];
+      const safetyOn = $("safetyEnabled")?.checked;
+      const perAccount = Number($("safetyDay")?.value || 0);
+      if (safetyOn && perAccount) {
+        const accountDaily = rules.strategy === "all_accounts" ? perDay : Math.ceil(perDay / Math.max(1, rules.accounts));
+        if (accountDaily > perAccount) {
+          lines.push(`<p class="warn-text">Cada cuenta tendría ${accountDaily} anuncios al día y la protección permite ${perAccount}: los que sobren se moverán al día siguiente.</p>`);
+        }
+      }
+      if (!safetyOn) {
+        lines.push(`<p class="warn-text">La protección de cuenta está apagada: el bot solo respetará el calendario.</p>`);
+      }
       if (catalogLimit < wanted) {
         lines.push(`<p>Con ${products} ${products === 1 ? "producto disponible" : "productos disponibles"} y ${rules.accounts} ${rules.accounts === 1 ? "cuenta" : "cuentas"} se llenarán unos ${catalogLimit}: el bot no vuelve a usar en una cuenta fotos que ya programó o publicó ahí.</p>`);
       }
@@ -216,8 +227,168 @@
     };
     const STRATEGY_HELP = {
       round_robin: "Cada espacio del calendario usa una cuenta, por turnos.",
-      all_accounts: "Cada espacio publica el mismo producto en todas las cuentas marcadas, con 7 minutos de diferencia.",
+      all_accounts: "Cada espacio publica el mismo producto en todas las cuentas marcadas, separadas según la protección de cuenta y con redacción distinta.",
     };
+
+    const ALERT_INFO = {
+      FORM_FIELD: ["Facebook no aceptó un campo del formulario", "Suele pasar si la ventana de Chrome estaba minimizada. Deja Chrome abierto (puede quedar detrás de otras ventanas) y pulsa Reintentar en el calendario."],
+      SESSION_BLOCKED: ["La sesión de Facebook no está lista", "Abre la sesión de la cuenta, inicia sesión y completa cualquier verificación. Luego reintenta."],
+      PUBLISH_OUTCOME_UNKNOWN: ["No se sabe si el anuncio se publicó", "Revisa \"Tus anuncios\" en Marketplace antes de reintentar para no duplicarlo."],
+      ACCOUNT_RESTRICTED: ["Facebook limitó o restringió la cuenta", "No publiques desde esa cuenta hasta que termine la pausa. Revisa el Centro de ayuda de Facebook y la calidad de tus anuncios."],
+      ACCOUNT_PAUSED: ["Cuenta en descanso tras varios fallos", "El bot la reanudará solo. Si ya corregiste el problema, pulsa Reanudar en el estado de la cuenta."],
+      CONTENT_POLICY: ["El texto del anuncio incumple una regla", "Quita enlaces o correos, acorta el título y vuelve a generar la semana."],
+      IMAGE_REUSED: ["Fotos ya usadas en esa cuenta", "Asigna fotos nuevas a ese producto en \"Fotos por producto y cuenta\"."],
+      IMAGE_INVALID: ["Una foto no se pudo subir", "Revisa que la foto exista y sea JPG o PNG de menos de 8 MB."],
+      TIMEOUT: ["Facebook tardó demasiado", "Revisa tu conexión a Internet. El bot reintentará más tarde."],
+      DATA_INVALID: ["Faltan datos del producto", "Sincroniza el SGI o revisa el inventario y las fotos."],
+      NO_PHOTOS: ["Producto sin fotos", "Sube las fotos del producto a Drive y sincroniza."],
+      PRICE_ISSUE: ["Precio dudoso en el SGI", "Corrige el precio en el SGI; mientras tanto no se publica."],
+      WORKER_ERROR: ["El trabajador tuvo un error", "Suele resolverse solo. Si se repite, reinicia el panel."],
+      DRIVE_NOT_AUTHORIZED: ["Google Drive sin autorizar", "Pulsa \"Autorizar Google Drive\" en la sección del SGI."],
+    };
+    const HEALTH_LABELS = {
+      ok: ["Lista", "ok"],
+      warming: ["En calentamiento", "info"],
+      waiting: ["Esperando turno", "info"],
+      paused: ["En pausa", "danger"],
+    };
+
+    function accountName(key) {
+      return state.accounts?.accounts?.[key]?.display_name || key || "";
+    }
+
+    function shortDate(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString("es-NI", { weekday: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    }
+
+    function renderAccountHealth() {
+      const health = state.autonomy?.health || {};
+      const safetyOn = state.autonomy?.safety?.enabled;
+      const statuses = state.statuses || {};
+      const keys = Object.keys(state.accounts?.accounts || {});
+      $("accountHealth").innerHTML = keys.length ? keys.map(key => {
+        const info = health[key] || {};
+        const [label, tone] = HEALTH_LABELS[info.status] || ["Sin datos", "info"];
+        const chrome = statuses[key]?.ok;
+        const lines = [];
+        if (info.pause) lines.push(`Hasta ${escapeHtml(shortDate(info.pause.until))}: ${escapeHtml(info.pause.reason || "")}`);
+        else if (info.status === "waiting") lines.push(`${escapeHtml(info.blocked_detail || "")} Próximo turno: ${escapeHtml(shortDate(info.next_allowed_at))}.`);
+        if (info.warmup_day && safetyOn) lines.push(`Día ${info.warmup_day} de ${info.warmup_days} de calentamiento.`);
+        if (info.consecutive_failures) lines.push(`${info.consecutive_failures} fallo(s) seguido(s): ${escapeHtml(info.last_error || "")}.`);
+        const pct = Math.min(100, Math.round(((info.today || 0) / Math.max(1, info.daily_limit || 1)) * 100));
+        return `<article class="health-card">
+          <header><strong>${escapeHtml(accountName(key))}</strong><span class="health-tag ${tone}">${label}</span></header>
+          <div class="health-meter" title="Anuncios de hoy"><span style="width:${pct}%"></span></div>
+          <div class="health-numbers">
+            <span><b>${info.today ?? 0}/${info.daily_limit ?? "-"}</b> hoy</span>
+            <span><b>${info.week ?? 0}/${info.weekly_limit ?? "-"}</b> en 7 días</span>
+            <span class="${chrome ? "" : "warn-text"}">Chrome ${chrome ? "abierto" : "cerrado"}</span>
+          </div>
+          ${lines.length ? `<p class="health-note">${lines.join("<br>")}</p>` : `<p class="health-note">Último anuncio: ${escapeHtml(shortDate(info.last_at) || "todavía ninguno")}.</p>`}
+          <div class="toolbar">
+            ${chrome ? "" : `<button data-health-open="${escapeHtml(key)}">Abrir sesión</button>`}
+            ${info.pause
+              ? `<button data-health-resume="${escapeHtml(key)}">Reanudar</button>`
+              : `<button data-health-pause="${escapeHtml(key)}">Pausar 24 h</button>`}
+          </div>
+        </article>`;
+      }).join("") : `<div class="review-empty">Agrega una cuenta en la pestaña Cuentas.</div>`;
+      document.querySelectorAll("[data-health-open]").forEach(button => button.onclick = () => openSession(button.dataset.healthOpen).catch(error => toast(error.message)));
+      document.querySelectorAll("[data-health-pause]").forEach(button => button.onclick = async () => {
+        const result = await api("/api/safety/pause", { method: "POST", body: JSON.stringify({ account: button.dataset.healthPause, hours: 24 }) });
+        state.autonomy = result.autonomy;
+        renderAutonomy();
+        toast("Cuenta en pausa por 24 horas");
+      });
+      document.querySelectorAll("[data-health-resume]").forEach(button => button.onclick = async () => {
+        const result = await api("/api/safety/resume", { method: "POST", body: JSON.stringify({ account: button.dataset.healthResume }) });
+        state.autonomy = result.autonomy;
+        renderAutonomy();
+        toast("Cuenta reanudada");
+      });
+    }
+
+    function renderChecklist() {
+      const autonomy = state.autonomy || {};
+      const config = autonomy.config || {};
+      const queue = autonomy.queue || [];
+      const statuses = state.statuses || {};
+      const accounts = config.accounts || [];
+      const needsApproval = ["supervised", "semiautomatic"].includes(config.mode);
+      const planned = queue.filter(item => item.status === "planned").length;
+      const upcoming = queue.filter(item => ["planned", "queued", "retry"].includes(item.status)).length;
+      const closed = accounts.filter(key => !statuses[key]?.ok);
+      const items = [
+        [closed.length === 0, closed.length ? `Abre la sesión de Chrome de ${closed.map(accountName).join(", ")}.` : "Las sesiones de Chrome de las cuentas están abiertas."],
+        [Boolean(autonomy.safety?.enabled), autonomy.safety?.enabled ? "Protección de cuenta activa." : "Activa la protección de cuenta en las reglas."],
+        [upcoming > 0, upcoming ? `${upcoming} publicaciones en el calendario.` : "Genera la semana para llenar el calendario."],
+        [!needsApproval || planned === 0, needsApproval && planned ? `Aprueba las ${planned} publicaciones pendientes: sin aprobación no se publica nada.` : "No hay publicaciones esperando aprobación."],
+        [(autonomy.alerts || []).length === 0, (autonomy.alerts || []).length ? `Revisa ${(autonomy.alerts || []).length} alerta(s).` : "Sin alertas abiertas."],
+        [Boolean(config.enabled), config.enabled ? "El bot está activo." : "Cuando todo esté en verde, activa \"Bot activo\"."],
+      ];
+      const ready = items.every(([ok]) => ok);
+      $("autoChecklist").className = `checklist ${ready ? "ready" : ""}`;
+      $("autoChecklist").innerHTML = `<strong>${ready ? "Todo listo: el bot está trabajando." : "Antes de dejar el bot solo"}</strong>
+        <ul>${items.map(([ok, text]) => `<li class="${ok ? "done" : "todo"}">${escapeHtml(text)}</li>`).join("")}</ul>`;
+
+      const banner = $("autoApprovalBanner");
+      banner.hidden = !(needsApproval && planned);
+      banner.innerHTML = `<strong>${planned} publicaciones esperan tu aprobación.</strong> Revisa cada una y pulsa "Aprobar", o "Aprobar pendientes" para todas.`;
+    }
+
+    function renderSafetyForm() {
+      const safety = state.autonomy?.safety || {};
+      $("safetyEnabled").checked = Boolean(safety.enabled);
+      document.querySelectorAll('input[name="safetyLevel"]').forEach(input => input.checked = input.value === (safety.level || "balanced"));
+      $("safetyDay").value = safety.max_per_account_day ?? 3;
+      $("safetyWeek").value = safety.max_per_account_week ?? 12;
+      $("safetyGap").value = safety.min_gap_minutes ?? 120;
+      $("safetyCross").value = safety.cross_account_gap_minutes ?? 90;
+      $("safetyRepeat").value = safety.family_repeat_days ?? 7;
+      $("safetyFailures").value = safety.failure_pause_threshold ?? 2;
+      $("safetyWarmup").checked = safety.warmup_enabled !== false;
+      $("safetyVary").checked = safety.vary_copy !== false;
+      toggleSafetyFields();
+    }
+
+    function toggleSafetyFields() {
+      const on = $("safetyEnabled").checked;
+      $("safetyCard").querySelectorAll("input:not(#safetyEnabled)").forEach(input => input.disabled = !on);
+    }
+
+    const SAFETY_FIELDS = {
+      max_per_account_day: "safetyDay",
+      max_per_account_week: "safetyWeek",
+      min_gap_minutes: "safetyGap",
+      cross_account_gap_minutes: "safetyCross",
+      family_repeat_days: "safetyRepeat",
+    };
+
+    function applySafetyLevel(level) {
+      const preset = state.autonomy?.safety_levels?.[level];
+      if (!preset) return;
+      Object.entries(SAFETY_FIELDS).forEach(([key, id]) => $(id).value = preset[key]);
+    }
+
+    function collectSafety() {
+      const current = state.autonomy?.safety || {};
+      return {
+        ...current,
+        enabled: $("safetyEnabled").checked,
+        level: document.querySelector('input[name="safetyLevel"]:checked')?.value || "custom",
+        max_per_account_day: Number($("safetyDay").value || 3),
+        max_per_account_week: Number($("safetyWeek").value || 12),
+        min_gap_minutes: Number($("safetyGap").value || 0),
+        cross_account_gap_minutes: Number($("safetyCross").value || 0),
+        family_repeat_days: Number($("safetyRepeat").value || 0),
+        failure_pause_threshold: Number($("safetyFailures").value || 2),
+        warmup_enabled: $("safetyWarmup").checked,
+        vary_copy: $("safetyVary").checked,
+      };
+    }
 
     function renderRulesHelp() {
       $("autoModeHelp").textContent = MODE_HELP[$("autoMode").value] || "";
@@ -245,11 +416,14 @@
       const activeDays = new Set(config.active_days || []);
       $("autoDays").innerHTML = dayNames.map((name, index) => `<label class="weekday-choice"><input type="checkbox" value="${index}" ${activeDays.has(index) ? "checked" : ""}> ${name}</label>`).join("");
 
+      renderSafetyForm();
       const selectedFamilies = new Set(config.selected_families || []);
       $("autoFamilies").innerHTML = (autonomy.families || []).map(family => `<label class="family-choice" title="${escapeHtml(family.reason || "")}">
         <input type="checkbox" value="${escapeHtml(family.key)}" ${selectedFamilies.has(family.key) ? "checked" : ""} ${family.eligible ? "" : "disabled"}>
-        ${escapeHtml(family.label)} <span class="muted">${family.valid_variant_count}/${family.variant_count}</span>
+        ${escapeHtml(family.label)} <span class="muted">${family.eligible ? `${family.valid_variant_count} variantes` : "sin foto"}</span>
       </label>`).join("");
+      const eligible = (autonomy.families || []).filter(family => family.eligible);
+      $("autoFamiliesCount").textContent = `${[...selectedFamilies].filter(key => eligible.some(family => family.key === key)).length} de ${eligible.length} en rotación`;
     }
 
     function renderAutonomy() {
@@ -267,6 +441,8 @@
       $("autoBlocked").textContent = counts.blocked || 0;
       $("autoWorker").textContent = autonomy.worker?.process_running ? "Activo" : "Detenido";
 
+      renderChecklist();
+      renderAccountHealth();
       renderSgi();
       renderAutonomyCalendar();
       renderAutonomyAlerts();
@@ -296,9 +472,20 @@
         sync.status === "error" && sync.detail ? `<p class="muted">${escapeHtml(sync.detail)}</p>` : "",
         sgi.drive_error ? `<p class="muted">Google Drive: ${escapeHtml(sgi.drive_error)}</p>` : "",
       ].join("");
+      const withoutPhotos = report.without_photos || [];
+      const byFamily = {};
+      withoutPhotos.forEach(entry => {
+        const prefix = String(entry.code || "").split("-")[0];
+        const family = (state.autonomy?.families || []).find(item => (item.sku_prefixes || []).some(value => value.startsWith(prefix + "-")));
+        const label = family?.label || prefix;
+        (byFamily[label] ||= []).push(entry.code);
+      });
+      $("sgiSummaryBadge").textContent = `${(report.publishable || []).length} listos · ${withoutPhotos.length} sin foto`;
       const lists = [
         block("Precio dudoso: no se publican", report.price_issues || [], entry => `${entry.code} (${entry.detail})`),
-        block("Con stock pero sin foto", report.without_photos || [], entry => entry.code),
+        Object.keys(byFamily).length
+          ? `<div class="alert-row"><div><strong>Con stock pero sin foto (${withoutPhotos.length}) — no se pueden publicar</strong><ul class="plain-list">${Object.entries(byFamily).map(([label, codes]) => `<li><b>${escapeHtml(label)}</b>: ${codes.length} variantes <span class="muted">(${escapeHtml(codes.join(", "))})</span></li>`).join("")}</ul></div></div>`
+          : "",
         block("Con foto local mientras marketing sube la de Drive", report.local_photos || [], code => code),
       ].join("");
       $("sgiLists").innerHTML = problems + (lists || (report.generated_at ? `<p class="muted">Todo lo que tiene stock está listo para publicarse.</p>` : ""));
@@ -359,6 +546,7 @@
         dates.push(day);
       }
       const labels = { planned: "Por aprobar", queued: "Programada", running: "En proceso", retry: "Reintento", published: "Publicada", tested: "Probada", blocked: "Bloqueada" };
+      items.forEach(item => item.statusClass = `calendar-${item.status}`);
       $("autonomyCalendar").innerHTML = dates.map(day => {
         const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
         const dayItems = byDay[key] || [];
@@ -366,10 +554,11 @@
           ${dayItems.length ? dayItems.map(item => {
             const value = String(item.scheduled_at || "").slice(0, 16);
             const canCancel = ["planned", "queued", "retry", "blocked"].includes(item.status);
-            return `<div class="calendar-item">
+            return `<div class="calendar-item ${escapeHtml(item.statusClass)}">
               <span>${escapeHtml(value.slice(11))} · ${escapeHtml(labels[item.status] || item.status)}</span>
-              <strong>${escapeHtml(item.name)}</strong>
-              <span>${escapeHtml(item.account)}</span>
+              <strong>${escapeHtml(String(item.name || "").replace(/ - automatico$/, ""))}</strong>
+              <span>${escapeHtml(accountName(item.account))}${item.job?.category ? ` · <small>${escapeHtml(item.job.category)}</small>` : ""}</span>
+              ${["blocked", "retry"].includes(item.status) || (item.status === "queued" && item.detail) ? `<small class="calendar-detail">${escapeHtml(item.detail || "")}</small>` : ""}
               <input type="datetime-local" value="${escapeHtml(value)}" data-move-value="${escapeHtml(item.id)}">
               <div class="calendar-actions">
                 <button data-auto-action="move" data-id="${escapeHtml(item.id)}" title="Cambiar hora">Mover</button>
@@ -389,10 +578,18 @@
     function renderAutonomyAlerts() {
       const alerts = state.autonomy?.alerts || [];
       $("autoAlerts").classList.toggle("review-empty", alerts.length === 0);
-      $("autoAlerts").innerHTML = alerts.length ? alerts.map(alert => `<div class="alert-row">
-        <div><strong>${escapeHtml(alert.code)}</strong><br><span>${escapeHtml(alert.message)}</span></div>
-        <button data-alert-resolve="${escapeHtml(alert.id)}">Resolver</button>
-      </div>`).join("") : "No hay alertas abiertas.";
+      $("autoResolveAllBtn").hidden = alerts.length < 2;
+      $("autoAlerts").innerHTML = alerts.length ? alerts.map(alert => {
+        const [title, advice] = ALERT_INFO[alert.code] || [alert.code, ""];
+        const who = alert.account ? ` · ${escapeHtml(accountName(alert.account))}` : "";
+        return `<div class="alert-row severity-${escapeHtml(alert.severity)}">
+          <div><strong>${escapeHtml(title)}</strong><span class="muted">${who} · ${escapeHtml(shortDate(alert.created_at))}</span><br>
+            <span>${escapeHtml(alert.message)}</span>
+            ${advice ? `<br><span class="alert-advice">Qué hacer: ${escapeHtml(advice)}</span>` : ""}
+          </div>
+          <button data-alert-resolve="${escapeHtml(alert.id)}">Revisada</button>
+        </div>`;
+      }).join("") : "No hay alertas abiertas.";
       document.querySelectorAll("[data-alert-resolve]").forEach(button => {
         button.onclick = async () => {
           const result = await api("/api/autonomy/alert/resolve", { method: "POST", body: JSON.stringify({ id: button.dataset.alertResolve }) });
@@ -498,6 +695,7 @@
 
     async function saveAutonomy() {
       if (!$("autoAccounts").querySelector("input:checked")) throw new Error("Selecciona al menos una cuenta.");
+      await api("/api/safety/config", { method: "POST", body: JSON.stringify({ safety: collectSafety() }) });
       const result = await api("/api/autonomy/config", { method: "POST", body: JSON.stringify({ config: collectAutonomyConfig() }) });
       state.autonomy = result.autonomy;
       autonomyFormDirty = false;
@@ -1256,8 +1454,7 @@
     document.querySelectorAll("nav button").forEach(btn => btn.onclick = () => showTab(btn.dataset.tab));
     $("refreshBtn").onclick = loadState;
     $("saveBtn").onclick = saveConfig;
-    $("autoSaveBtn").onclick = saveAutonomy;
-    $("autoGenerateBtn").onclick = generateAutonomyWeek;
+    $("autoGenerateBtn").onclick = () => generateAutonomyWeek().catch(error => toast(error.message));
     const markRulesDirty = () => {
       autonomyFormDirty = true;
       setDirty();
@@ -1265,14 +1462,28 @@
       renderRulesSummary();
     };
     $("autoRulesSection").addEventListener("input", markRulesDirty);
+    document.querySelectorAll('input[name="safetyLevel"]').forEach(input => input.addEventListener("change", () => applySafetyLevel(input.value)));
+    Object.values(SAFETY_FIELDS).forEach(id => $(id).addEventListener("input", () => {
+      const custom = document.querySelector('input[name="safetyLevel"][value="custom"]');
+      if (custom) custom.checked = true;
+    }));
+    $("safetyEnabled").addEventListener("change", toggleSafetyFields);
+    $("autoResolveAllBtn").onclick = async () => {
+      const result = await api("/api/autonomy/alert/resolve-all", { method: "POST", body: "{}" });
+      state.autonomy = result.autonomy;
+      renderAutonomy();
+    };
     $("autoRulesSection").addEventListener("change", markRulesDirty);
     $("autoFamilies").addEventListener("change", markRulesDirty);
     $("autoRulesSaveBtn").onclick = () => saveAutonomy().catch(error => toast(error.message));
-    $("autoApproveBtn").onclick = approveAutonomyWeek;
+    $("autoApproveBtn").onclick = () => approveAutonomyWeek().catch(error => toast(error.message));
     $("sgiKeyBtn").onclick = () => saveSgiKey().catch(error => toast(error.message));
     $("sgiSyncBtn").onclick = () => syncSgi().catch(error => toast(error.message));
     $("sgiDriveBtn").onclick = () => authorizeDrive().catch(error => toast(error.message));
-    $("autoEnabled").onchange = saveAutonomy;
+    $("autoEnabled").onchange = () => saveAutonomy().catch(error => {
+      $("autoEnabled").checked = !$("autoEnabled").checked;
+      toast(error.message);
+    });
     $("customPhotos").onchange = () => uploadCustomPhotos([...$("customPhotos").files]);
     $("customSaveBtn").onclick = () => saveCustomProduct().catch(error => toast(error.message));
     $("addJobBtn").onclick = () => {

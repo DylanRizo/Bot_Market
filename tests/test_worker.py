@@ -177,3 +177,79 @@ def test_modo_simulacion_no_marca_publicado(store, worker_env):
     resultado = store.get_queue_item(queue_id)
     assert resultado["status"] == "tested"
     assert store.publication_exists(resultado["account"], resultado["fingerprint"]) is False
+
+
+# --- proteccion de cuenta ----------------------------------------------------
+
+def test_detalle_legible_usa_la_linea_de_error_del_publicador():
+    salida = (
+        "[marketplace-browser] [error-code:FORM_FIELD] stage=category\n"
+        "[marketplace-browser] ERROR: No pude seleccionar Category=Men's clothing & shoes.\n"
+        "Fallo el job 0: Camisa sin mangas"
+    )
+    code, detail = worker.classify_failure(salida, 1, publishing=True)
+    assert code == "FORM_FIELD"
+    assert detail == "No pude seleccionar Category=Men's clothing & shoes."
+
+
+def test_limite_de_cuenta_pospone_sin_gastar_intento(store, worker_env, monkeypatch):
+    from marketplace_safety import save_safety
+
+    queue_id = enqueue_job(store, scheduled_at="2020-01-01T09:00:00", max_attempts=2)
+    store.record_publish_event("cuenta1", "anterior", "prueba")
+    llamado = []
+    monkeypatch.setattr(worker.subprocess, "run", lambda *a, **k: llamado.append(a))
+    save_safety(store, {"min_gap_minutes": 120})
+    item = store.claim_due()
+
+    worker.run_item(store, item, config("autonomous"))
+
+    resultado = store.get_queue_item(queue_id)
+    assert not llamado, "no debe abrir Facebook"
+    assert resultado["status"] == "queued"
+    assert resultado["attempts"] == 0
+    assert resultado["next_attempt_at"] > resultado["updated_at"]
+    assert "proteccion de cuenta" in resultado["detail"]
+    assert store.claim_due() is None, "no se vuelve a tomar antes de tiempo"
+
+
+def test_prueba_sin_publicar_no_la_frena_la_proteccion(store, worker_env):
+    queue_id = enqueue_job(store, scheduled_at="2020-01-01T09:00:00")
+    store.record_publish_event("cuenta1", "anterior", "prueba")
+    worker_env.set_subprocess(0, "formulario probado")
+    item = store.claim_due()
+
+    worker.run_item(store, item, config("dry_run"))
+
+    assert store.get_queue_item(queue_id)["status"] == "tested"
+
+
+def test_espera_del_runner_se_reprograma(store, worker_env):
+    queue_id = enqueue_job(store, scheduled_at="2020-01-01T09:00:00", max_attempts=1)
+    salida = "[marketplace-browser] [error-code:SAFETY_HOLD] Proteccion de cuenta: limite\nProteccion de cuenta"
+    worker_env.set_subprocess(1, salida)
+    item = store.claim_due()
+
+    worker.run_item(store, item, config("autonomous"))
+
+    resultado = store.get_queue_item(queue_id)
+    assert resultado["status"] == "queued"
+    assert resultado["attempts"] == 0
+    assert not store.list_alerts()
+
+
+def test_restriccion_de_facebook_bloquea(store, worker_env):
+    queue_id = enqueue_job(store, scheduled_at="2020-01-01T09:00:00", max_attempts=3)
+    worker_env.set_subprocess(1, "[marketplace-browser] [error-code:ACCOUNT_RESTRICTED] stage=open-session")
+    item = store.claim_due()
+
+    worker.run_item(store, item, config("autonomous"))
+
+    assert store.get_queue_item(queue_id)["status"] == "blocked"
+
+
+def test_publicada_limpia_el_detalle_del_fallo_anterior(store, worker_env):
+    queue_id = enqueue_job(store, scheduled_at="2020-01-01T09:00:00")
+    store.update_queue_item(queue_id, detail="Fallo el job 0: algo")
+    store.mark_published(queue_id)
+    assert store.get_queue_item(queue_id)["detail"] == "Publicada en Marketplace."
