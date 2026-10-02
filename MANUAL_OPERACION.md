@@ -218,40 +218,22 @@ Los archivos locales de esta integracion (`.sgi_integration_key.bin`,
 `token_google_drive.json`, `marketplace_integrations.json`, `sgi_drive_cache/`,
 `sgi_drive_index.json`, `sgi_sync_report.json`) no se versionan.
 
-### Google Sheets + WooCommerce (metodo anterior)
+### Fotos locales de respaldo
 
-```powershell
-python firupost_automator.py --source sync
-```
+Si un producto no tiene fotos en Drive, el bot usa las de la carpeta local
+`imagenes_firupost/<CODIGO>/` (hasta 10, ordenadas por nombre). Si no hay en
+ninguno de los dos sitios, el producto se descarta con `NO_PHOTOS`.
 
-Cruza la hoja `Inventario` con WooCommerce, valida las imagenes y escribe
-`ArticulosGenerados.xlsx` y `firupost_validation_report.xlsx`. Necesita
-`credenciales_google.json` y las variables `WP_URL`, `WP_CONSUMER_KEY`,
-`WP_CONSUMER_SECRET` y `GOOGLE_SHEET_ID`. Opciones: `--category`, `--location`,
-`--currency`, `--whatsapp`, `--include-invalid`, `--allow-duplicates`.
+El flujo anterior de Google Sheets + WooCommerce ya no se usa y esta en
+[`legacy/`](legacy/README.md).
 
 ## Descripciones con IA
 
-Opcional; sin clave el bot usa redaccion comercial local.
-
-- **Desde el panel** (`/api/ai/configure`): la clave se guarda cifrada con DPAPI
-  en `.firupost_openai_key.bin`, ligada al usuario de Windows; no se copia a otra
-  computadora. Modelo por defecto: variable `FIRUPOST_OPENAI_MODEL`. Tambien se
-  lee `OPENAI_API_KEY` si esta definida.
-- **Al regenerar el Excel**: `firupost_automator.py` puede llamar a un comando
-  externo que recibe el producto como JSON por `stdin` y devuelve la descripcion
-  por `stdout`. Define `FIRUPOST_AI_DESCRIPTION_COMMAND`, o usa
-  `regenerar_excel_con_ia.ps1` con el wrapper incluido
-  (`firupost_ai_description_openai_compatible.py`):
-
-```powershell
-$env:FIRUPOST_AI_API_KEY="..."     # o OPENAI_API_KEY
-$env:FIRUPOST_AI_MODEL="..."
-$env:FIRUPOST_AI_BASE_URL="https://proveedor.example/v1"   # opcional
-powershell -ExecutionPolicy Bypass -File .\regenerar_excel_con_ia.ps1
-```
-
-Si el comando falla, usa la descripcion local para no detener el lote.
+Opcional; sin clave el bot usa redaccion comercial local. Se configura desde el
+panel (`/api/ai/configure`): la clave se guarda cifrada con DPAPI en
+`.firupost_openai_key.bin`, ligada al usuario de Windows, y no se copia a otra
+computadora. El modelo por defecto sale de `FIRUPOST_OPENAI_MODEL`. Tambien se
+lee `OPENAI_API_KEY` si esta definida.
 
 ## Herramientas de linea de comandos
 
@@ -290,10 +272,8 @@ Datos locales (ninguno se versiona; ver `.gitignore`):
 | `marketplace_scheduler_worker.log` | Log del trabajador |
 
 Variables: `MARKETPLACE_BOT_DB` (ruta alternativa de la base),
-`SGI_INTEGRATION_KEY` (llave del SGI sin pasar por el panel), `OPENAI_API_KEY`,
-`FIRUPOST_OPENAI_MODEL`, `FIRUPOST_AI_*` (ver arriba), `WP_URL`,
-`WP_CONSUMER_KEY`, `WP_CONSUMER_SECRET`, `GOOGLE_SHEET_ID`, `FIRUPOST_LOCATION`,
-`FIRUPOST_CATEGORY`, `FIRUPOST_CURRENCY`, `FIRUPOST_WHATSAPP`.
+`SGI_INTEGRATION_KEY` (llave del SGI sin pasar por el panel), `OPENAI_API_KEY` y
+`FIRUPOST_OPENAI_MODEL` (IA).
 
 ## Codigos de alerta
 

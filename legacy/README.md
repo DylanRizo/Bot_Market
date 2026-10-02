@@ -22,9 +22,15 @@ mantenimiento ni tiene pruebas.
 | `publicar_prueba_sesion_abierta.ps1` | Igual, reutilizando una sesion ya iniciada |
 | `abrir_sesion_facebook_firupost.ps1` | Abria Chrome con el perfil que usaba FiruPost |
 
-`firupost_automator.py` **no** esta aqui: sigue en la raiz porque es la
-sincronizacion de inventario (Google Sheets + WooCommerce a
-`ArticulosGenerados.xlsx`) de la que depende el bot actual.
+| `firupost_automator.py` | Sincronizaba Google Sheets + WooCommerce al Excel (`--source sync`) |
+| `firupost_ai_description_openai_compatible.py` | Wrapper de IA para las descripciones de ese Excel |
+| `regenerar_excel_con_ia.ps1` | Ejecutaba el paso anterior con IA |
+| `prompt_firupost_ia.txt` | Prompt del modulo `Responder Mensajes IA` de FiruPost |
+
+El inventario ya no sale de WooCommerce sino del SGI (`sgi_sync.py`). El script
+`firupost_automator.py` ya no trae llaves de WooCommerce: si lo ejecutas, define
+`WP_URL`, `WP_CONSUMER_KEY`, `WP_CONSUMER_SECRET` y `GOOGLE_SHEET_ID`, y deja
+`credenciales_google.json` en la raiz del proyecto.
 
 ## Como se usaba (referencia)
 
@@ -54,7 +60,6 @@ las razones del cambio al publicador directo.
 
 Documentacion oficial de FiruPost: https://firupost.netlify.app/docs
 
-`prompt_firupost_ia.txt`, en la raiz, es el prompt para el modulo `Responder
-Mensajes IA` de FiruPost (placeholders `{Titulo}`, `{Precio}`, `{Condicion}`,
-`{Descripcion}`, `{Stock}`, `{Ubicacion}`, `{Sku}`). Lo regenera
+`prompt_firupost_ia.txt` usa los placeholders `{Titulo}`, `{Precio}`,
+`{Condicion}`, `{Descripcion}`, `{Stock}`, `{Ubicacion}`, `{Sku}`. Lo regenera
 `firupost_automator.py`; el bot actual no lo usa.

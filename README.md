@@ -6,8 +6,8 @@ navegador y deja constancia de cada intento. Se administra desde un panel web
 local.
 
 Pensado para una tienda con varias cuentas de Marketplace y la necesidad de
-publicar sin estar delante. El inventario sale de un SGI con fotos en Google
-Drive, o de un Excel generado desde Google Sheets y WooCommerce.
+publicar sin estar delante. El inventario sale de un SGI; las fotos, de Google
+Drive y de una carpeta local de respaldo.
 
 ## Que hace
 
@@ -126,15 +126,14 @@ static/                          frontend del panel (html, css, js)
 sgi_client.py                    lectura del catalogo del SGI con la llave de integracion
 drive_photos.py                  fotos de producto desde Google Drive (solo lectura)
 sgi_sync.py                      genera el Excel y las carpetas de fotos desde SGI + Drive
-firupost_automator.py            metodo anterior: Google Sheets + WooCommerce al Excel
-firupost_ai_description_openai_compatible.py  wrapper de IA para firupost_automator.py
 *.ps1                            iniciadores de Windows (panel, trabajador, sesiones, paquete)
 legacy/                          generacion anterior, ya no se usa
 tests/                           suite de regresion
 ```
 
-El nombre `firupost_*` es historico: el Excel conserva las columnas del formato de
-FiruPost (`Titulo`, `Precio`, `Categoria`, ...), pero el bot ya no usa ese programa.
+El nombre `imagenes_firupost` y las columnas del Excel (`Titulo`, `Precio`,
+`Categoria`, ...) son historicos: vienen del formato de FiruPost, pero el bot ya no
+usa ese programa.
 
 ## Pruebas
 

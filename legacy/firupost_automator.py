@@ -30,12 +30,13 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-SCRATCH_DIR = Path(__file__).resolve().parent
+SCRATCH_DIR = Path(__file__).resolve().parent.parent  # raiz del proyecto
+LEGACY_DIR = Path(__file__).resolve().parent
 DEFAULT_IMAGES_DIR = SCRATCH_DIR / "imagenes_firupost"
 DEFAULT_EXISTING_EXCEL = SCRATCH_DIR / "Articulos_FiruPost.xlsx"
 DEFAULT_OUTPUT_EXCEL = SCRATCH_DIR / "ArticulosGenerados.xlsx"
 DEFAULT_REPORT_EXCEL = SCRATCH_DIR / "firupost_validation_report.xlsx"
-DEFAULT_PROMPT_FILE = SCRATCH_DIR / "prompt_firupost_ia.txt"
+DEFAULT_PROMPT_FILE = LEGACY_DIR / "prompt_firupost_ia.txt"
 
 FIRUPOST_COLUMNS = [
     "Titulo",
@@ -53,8 +54,8 @@ FIRUPOST_COLUMNS = [
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 DEFAULT_WP_URL = "https://lacomarcanic.com/"
-DEFAULT_WP_CONSUMER_KEY = os.getenv("WP_CONSUMER_KEY", "ck_8be7948184af5e0568d1333703aa14f44ac8ae3f")
-DEFAULT_WP_CONSUMER_SECRET = os.getenv("WP_CONSUMER_SECRET", "cs_918cdb15ef324f202e5cae41ab7211c173864c57")
+DEFAULT_WP_CONSUMER_KEY = os.getenv("WP_CONSUMER_KEY", "")
+DEFAULT_WP_CONSUMER_SECRET = os.getenv("WP_CONSUMER_SECRET", "")
 DEFAULT_GOOGLE_CREDENTIALS = SCRATCH_DIR / "credenciales_google.json"
 DEFAULT_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "1_WdxwD77PPS_gaQgzhYsyfURwVTn_4LIKghBVrdDiw0")
 
