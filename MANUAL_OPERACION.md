@@ -154,6 +154,11 @@ En `Automatizacion > Fotos definidas por producto y cuenta` marcas las miniatura
 que usara cada producto en cada cuenta y pulsas `Guardar reglas`. Se aplica al
 siguiente calendario; lo ya programado conserva sus fotos.
 
+Debajo de las miniaturas aparece `Orden de subida` (con 2 o mas fotos marcadas):
+mueve cada foto con las flechas `←` `→`. **La primera es la portada** y ese es el
+orden en que se suben a Facebook. Las fotos que marcas despues se agregan al
+final. El orden es propio de cada producto y cuenta.
+
 El bot calcula una huella SHA-256 del **contenido** de cada foto:
 
 - Una foto publicada en una cuenta no vuelve a programarse en esa cuenta; en

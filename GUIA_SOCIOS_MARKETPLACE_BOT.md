@@ -143,7 +143,8 @@ debe usar un puerto y una carpeta de Chrome diferentes.
 4. Marca las cuentas, dias, horario, maximo diario e intervalo.
 5. Selecciona los productos del catalogo.
 6. En `Fotos definidas por producto y cuenta`, marca las fotos permitidas para
-   cada cuenta. Puede usarse la misma foto en cuentas diferentes.
+   cada cuenta. Puede usarse la misma foto en cuentas diferentes. En `Orden de
+   subida` ordena las fotos con las flechas; la primera es la portada.
 7. Pulsa `Guardar reglas`.
 8. Pulsa `Generar semana` y revisa el calendario.
 9. Aprueba solo los trabajos correctos.

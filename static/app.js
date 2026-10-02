@@ -107,13 +107,42 @@
               <input type="checkbox" data-auto-photo-account="${escapeHtml(account)}" data-auto-photo-family="${escapeHtml(product.key)}" value="${escapeHtml(image.id)}" ${selected.has(image.id) ? "checked" : ""}>
             </label>`).join("")}</div>
           </div>`).join("");
+          // Orden de subida: la primera foto es la portada del anuncio.
+          const imagesById = new Map(product.images.map(image => [image.id, image]));
+          const ordered = (autoPhotoDraft[account]?.[product.key] || []).filter(id => imagesById.has(id));
+          const orderStrip = ordered.length > 1 ? `<div class="photo-order">
+            <span class="photo-color-label">Orden de subida <small>la 1.ª es la portada</small></span>
+            <div class="photo-picker">${ordered.map((id, position) => {
+              const image = imagesById.get(id);
+              const move = (delta, label, symbol, disabled) => `<button type="button" class="icon-button" data-auto-photo-move="${escapeHtml(id)}" data-auto-photo-account="${escapeHtml(account)}" data-auto-photo-family="${escapeHtml(product.key)}" data-delta="${delta}" title="${label}" aria-label="${label}" ${disabled ? "disabled" : ""}>${symbol}</button>`;
+              return `<div class="photo-order-item" title="${escapeHtml(image.name)}">
+                <img src="${escapeHtml(image.url)}" alt="${escapeHtml(product.label)} - posición ${position + 1}">
+                <span class="photo-order-badge">${position + 1}</span>
+                <div class="review-photo-controls">${move(-1, "Mover foto antes", "←", position === 0)}${move(1, "Mover foto después", "→", position === ordered.length - 1)}</div>
+              </div>`;
+            }).join("")}</div>
+          </div>` : "";
           return `<div class="photo-account"><strong>${escapeHtml(accounts[account]?.display_name || account)}</strong>
             ${choices || '<span class="muted">Sin fotos disponibles</span>'}
+            ${orderStrip}
             <span class="photo-count">${selected.size} fotos seleccionadas</span>
           </div>`;
         }).join("")}</div>
       </article>`).join("");
-      document.querySelectorAll("[data-auto-photo-account]").forEach(input => {
+      document.querySelectorAll("[data-auto-photo-move]").forEach(button => {
+        button.onclick = () => {
+          const list = autoPhotoDraft[button.dataset.autoPhotoAccount]?.[button.dataset.autoPhotoFamily];
+          if (!list) return;
+          const from = list.indexOf(button.dataset.autoPhotoMove);
+          const to = from + Number(button.dataset.delta);
+          if (from < 0 || to < 0 || to >= list.length) return;
+          [list[from], list[to]] = [list[to], list[from]];
+          autoPhotoDraftDirty = true;
+          setDirty();
+          renderAutoPhotoAssignments();
+        };
+      });
+      document.querySelectorAll("input[data-auto-photo-account]").forEach(input => {
         input.onchange = () => {
           const account = input.dataset.autoPhotoAccount;
           const family = input.dataset.autoPhotoFamily;
