@@ -1,6 +1,21 @@
 # Modos de publicacion Marketplace
 
-En cada job de `marketplace_campaign_example.json` puedes elegir como publicar los productos con `listing_mode`.
+> Esto describe las **campanas JSON manuales** que ejecuta
+> `marketplace_campaign_runner.py`. El uso normal es el panel y el calendario
+> automatico (ver [`MANUAL_OPERACION.md`](MANUAL_OPERACION.md)), que eligen el
+> modo por familia de producto. El archivo de campana no viene en el repositorio:
+> creas el tuyo (`marketplace_campaign_example.json` es el nombre por defecto y
+> esta ignorado por git) o lo indicas con `--campaign`.
+
+Una campana es un objeto con `default_account` (clave de `marketplace_accounts.json`)
+y una lista `jobs`. En cada job eliges como publicar los productos con `listing_mode`:
+
+```json
+{
+  "default_account": "cuenta1",
+  "jobs": [ { "name": "...", "listing_mode": "individual", "source_excel": "ArticulosGenerados.xlsx", "images_root": "imagenes_firupost" } ]
+}
+```
 
 ## 1. Individual
 
@@ -73,14 +88,24 @@ Puedes seleccionar productos con cualquiera de estas opciones:
 - `title_contains`: texto dentro del titulo, por ejemplo `["sin mangas"]`.
 - `exclude_title_contains`: texto a excluir, por ejemplo `["sin mangas"]`.
 
-Antes de publicar, revisa el plan:
+Antes de publicar, revisa el plan (no abre Facebook):
 
 ```powershell
-python "C:\ruta\al\bot\marketplace_campaign_runner.py" --plan-only
+python marketplace_campaign_runner.py --plan-only
+```
+
+Para llenar el formulario y avanzar con `Next` sin publicar:
+
+```powershell
+python marketplace_campaign_runner.py --advance-only
 ```
 
 Para publicar de verdad respetando los intervalos:
 
 ```powershell
-python "C:\ruta\al\bot\marketplace_campaign_runner.py" --confirm-publish
+python marketplace_campaign_runner.py --confirm-publish
 ```
+
+Otras opciones: `--campaign RUTA`, `--accounts RUTA`, `--from-job N`,
+`--max-jobs N` y `--fast` (ignora las esperas; solo para pruebas). El runner
+tambien respeta la proteccion de cuenta y el candado de cada cuenta.

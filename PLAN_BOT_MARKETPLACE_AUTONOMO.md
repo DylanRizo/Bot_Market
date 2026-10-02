@@ -2,16 +2,42 @@
 
 ## Estado de implementacion
 
-Las fases 0 a 8 fueron implementadas el 30 de agosto de 2026. El sistema queda
-en modo `supervised`, con el trabajador instalado en Windows y el interruptor
-`Bot activo` apagado. La activacion de publicaciones reales se realiza desde el
-panel despues de revisar el calendario.
+Este documento es el diseno original por fases. **Las fases 0 a 8 estan
+implementadas** (30 de agosto de 2026). El bot arranca en modo `supervised`, con
+el interruptor `Bot activo` apagado; la publicacion real se activa desde el panel
+tras revisar el calendario. Para el uso actual ve a
+[`MANUAL_OPERACION.md`](MANUAL_OPERACION.md).
 
-Extensiones posteriores implementadas:
+Extensiones posteriores al plan original:
 
-- Historial de fotos separado por cuenta y bloqueo de contenido repetido.
+- Historial de fotos por cuenta (huella SHA-256 del contenido) y bloqueo de
+  contenido repetido.
 - Seleccion de varias cuentas con rotacion o publicacion en todas.
 - Productos manuales independientes del inventario principal.
+- Proteccion de cuenta (`marketplace_safety.py`): limites por cuenta,
+  calentamiento, pausas por fallos o restriccion, revision del texto y variacion
+  de redaccion por cuenta.
+- Variacion estable de horarios y reintentos con espera progresiva.
+- Proteccion contra duplicados mediante marca previa a `Publish`
+  (`PUBLISH_OUTCOME_UNKNOWN`).
+- Inventario desde un SGI y fotos desde Google Drive, con revalidacion de stock,
+  precio y fotos justo antes de cada anuncio.
+- Frontend del panel separado en `static/` y generacion anterior (FiruPost)
+  aislada en `legacy/`.
+
+Equivalencia entre los niveles de la fase 8 y los nombres del panel:
+
+| Fase 8 | Panel | Valor interno |
+|---|---|---|
+| Nivel 1: simulacion | `Simulacion` | `simulation` |
+| Nivel 2: dry-run | `Prueba sin publicar` | `dry_run` |
+| Nivel 3: supervisado | `Supervisado` | `supervised` |
+| Nivel 4: semiautomatico | `Calendario aprobado` | `semiautomatic` |
+| Nivel 5: autonomo | `Autonomo` | `autonomous` |
+
+Ideas que quedan fuera del plan implementado: conectores de correo o mensajeria
+para las alertas (la fase 7 solo cubre alertas locales en el panel) y arrastrar
+elementos del calendario para cambiar su hora.
 
 ## Objetivo final
 
