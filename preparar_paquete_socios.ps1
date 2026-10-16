@@ -73,7 +73,9 @@ Set-Content -LiteralPath (Join-Path $package "marketplace_accounts.json") -Value
 
 if ($IncludeCatalog) {
     Copy-Item -LiteralPath (Join-Path $source "ArticulosGenerados.xlsx") -Destination $package
-    Copy-Item -LiteralPath (Join-Path $source "imagenes_firupost") -Destination $package -Recurse
+    $images = Join-Path $source "imagenes_productos"
+    if (-not (Test-Path -LiteralPath $images)) { $images = Join-Path $source "imagenes_firupost" }
+    Copy-Item -LiteralPath $images -Destination $package -Recurse
 }
 
 Compress-Archive -LiteralPath $package -DestinationPath $zip -CompressionLevel Optimal

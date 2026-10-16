@@ -25,7 +25,7 @@ import pandas as pd
 
 from marketplace_catalog import ASSISTANT_PRESETS, STYLE_TO_MODE
 from marketplace_custom_products import CUSTOM_ROOT, create_custom_product
-from marketplace_runtime import process_exists
+from marketplace_runtime import IMAGES_DIR_NAME, images_root, process_exists
 from marketplace_safety import (
     LEVELS as SAFETY_LEVELS,
     backfill_events,
@@ -67,7 +67,7 @@ ACCOUNTS_PATH = SCRATCH_DIR / "marketplace_accounts.json"
 CAMPAIGN_PATH = SCRATCH_DIR / "marketplace_campaign_example.json"
 ACTIVITY_PATH = SCRATCH_DIR / "marketplace_activity.json"
 INVENTORY_PATH = SCRATCH_DIR / "ArticulosGenerados.xlsx"
-IMAGES_ROOT = SCRATCH_DIR / "imagenes_firupost"
+IMAGES_ROOT = images_root(SCRATCH_DIR)
 CAMPAIGN_UPLOADS_ROOT = SCRATCH_DIR / "marketplace_campaign_uploads"
 RUNNER_PATH = SCRATCH_DIR / "marketplace_campaign_runner.py"
 OPEN_SESSION_SCRIPT = SCRATCH_DIR / "abrir_sesion_marketplace_cuenta.ps1"
@@ -588,7 +588,7 @@ def build_assistant_campaign(payload: dict[str, Any]) -> dict[str, Any]:
             "account": account,
             "listing_mode": mode,
             "source_excel": "ArticulosGenerados.xlsx",
-            "images_root": "imagenes_firupost",
+            "images_root": IMAGES_DIR_NAME,
         }
         if group_by:
             job["group_by"] = group_by

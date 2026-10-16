@@ -58,7 +58,7 @@ def test_los_presets_reconocen_el_sku_nuevo_sin_mezclar_familias():
 
 @pytest.fixture()
 def workspace(tmp_path: Path):
-    images = tmp_path / "imagenes_firupost"
+    images = tmp_path / "imagenes_productos"
     (images / "TSBL-S").mkdir(parents=True)
     (images / "TSBL-S" / "foto_1.jpg").write_bytes(b"foto local")
     cache = tmp_path / "cache"

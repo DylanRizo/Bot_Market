@@ -7,10 +7,12 @@ from typing import Any
 
 import pandas as pd
 
+from marketplace_runtime import IMAGES_DIR_NAME, images_root
+
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 INVENTORY_PATH = SCRATCH_DIR / "ArticulosGenerados.xlsx"
-IMAGES_ROOT = SCRATCH_DIR / "imagenes_firupost"
+IMAGES_ROOT = images_root(SCRATCH_DIR)
 
 CLOTHING = "Men's clothing & shoes"
 WOMEN = "Women's clothing & shoes"
@@ -237,7 +239,7 @@ def build_family_jobs(
             "account": account,
             "listing_mode": mode,
             "source_excel": "ArticulosGenerados.xlsx",
-            "images_root": "imagenes_firupost",
+            "images_root": IMAGES_DIR_NAME,
             "category": preset.get("category") or "Men's clothing & shoes",
         }
         if group_by:

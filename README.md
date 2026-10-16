@@ -67,7 +67,7 @@ copy marketplace_accounts.example.json marketplace_accounts.json
 ```
 
 Edita `marketplace_accounts.json` con tus cuentas y coloca junto al bot tu
-`ArticulosGenerados.xlsx` y la carpeta `imagenes_firupost`. Despues:
+`ArticulosGenerados.xlsx` y la carpeta `imagenes_productos`. Despues:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\abrir_sesion_marketplace_cuenta.ps1   # inicia sesion una vez
@@ -130,9 +130,10 @@ sgi_sync.py                      genera el Excel y las carpetas de fotos desde S
 tests/                           suite de regresion
 ```
 
-El nombre `imagenes_firupost` y las columnas del Excel (`Titulo`, `Precio`,
-`Categoria`, ...) son historicos: vienen del formato de FiruPost, pero el bot ya no
-usa ese programa.
+Las columnas del Excel (`Titulo`, `Precio`, `Categoria`, ...) vienen del formato
+de FiruPost, pero el bot ya no usa ese programa. Si vienes de una instalacion
+anterior (carpeta `imagenes_firupost`), mira
+[Migrar una instalacion anterior](MANUAL_OPERACION.md#migrar-una-instalacion-anterior).
 
 ## Pruebas
 

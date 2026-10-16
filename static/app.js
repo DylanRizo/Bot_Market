@@ -1112,7 +1112,7 @@
         job.group_by = "size";
       }
       job.source_excel = job.source_excel || job.excel || "ArticulosGenerados.xlsx";
-      job.images_root = job.images_root || "imagenes_firupost";
+      job.images_root = job.images_root || "imagenes_productos";
     }
 
     function renderJobs() {
@@ -1136,7 +1136,7 @@
             <div class="col-3"><label>Cuenta</label><select data-field="account">${accountOptions(job.account || state.campaign.default_account)}</select></div>
             <div class="col-3"><label>Item interval min</label><input data-field="item_interval_minutes" type="number" min="0" value="${job.item_interval_minutes ?? ""}"></div>
             <div class="col-3"><label>Excel/source</label><input data-field="excel" value="${job.source_excel || job.excel || "ArticulosGenerados.xlsx"}"></div>
-            <div class="col-3"><label>Imagenes</label><input data-field="images_root" value="${job.images_root || "imagenes_firupost"}"></div>
+            <div class="col-3"><label>Imagenes</label><input data-field="images_root" value="${job.images_root || "imagenes_productos"}"></div>
             <div class="col-3"><label>Row index</label><input data-field="row_index" type="number" min="0" value="${job.row_index ?? 0}"></div>
             <div class="col-3"><label>SKUs</label><input data-field="skus" value="${arrayText(job.skus)}" placeholder="TSBK-M,TSBK-L"></div>
             <div class="col-3"><label>Prefijos SKU</label><input data-field="sku_prefixes" value="${arrayText(job.sku_prefixes)}" placeholder="TS,CC"></div>
@@ -1271,7 +1271,7 @@
             enabled: false,
             delay_minutes: 0,
             excel: "ArticulosGenerados.xlsx",
-            images_root: "imagenes_firupost",
+            images_root: "imagenes_productos",
             row_index: row.index,
           });
           setDirty();
@@ -1522,7 +1522,7 @@
         delay_minutes: 0,
         listing_mode: "grouped",
         source_excel: "ArticulosGenerados.xlsx",
-        images_root: "imagenes_firupost",
+        images_root: "imagenes_productos",
         title_contains: [],
       });
       setDirty();
