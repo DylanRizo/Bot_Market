@@ -224,9 +224,6 @@ Si un producto no tiene fotos en Drive, el bot usa las de la carpeta local
 `imagenes_firupost/<CODIGO>/` (hasta 10, ordenadas por nombre). Si no hay en
 ninguno de los dos sitios, el producto se descarta con `NO_PHOTOS`.
 
-El flujo anterior de Google Sheets + WooCommerce ya no se usa y esta en
-[`legacy/`](legacy/README.md).
-
 ## Descripciones con IA
 
 Opcional; sin clave el bot usa redaccion comercial local. Se configura desde el

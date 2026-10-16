@@ -22,8 +22,9 @@ Extensiones posteriores al plan original:
   (`PUBLISH_OUTCOME_UNKNOWN`).
 - Inventario desde un SGI y fotos desde Google Drive, con revalidacion de stock,
   precio y fotos justo antes de cada anuncio.
-- Frontend del panel separado en `static/` y generacion anterior (FiruPost)
-  aislada en `legacy/`.
+- Frontend del panel separado en `static/`. Se eliminaron la automatizacion del
+  programa FiruPost y la sincronizacion con WooCommerce: el bot publica
+  directamente en el navegador y el inventario sale del SGI.
 
 Equivalencia entre los niveles de la fase 8 y los nombres del panel:
 

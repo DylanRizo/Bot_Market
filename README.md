@@ -127,7 +127,6 @@ sgi_client.py                    lectura del catalogo del SGI con la llave de in
 drive_photos.py                  fotos de producto desde Google Drive (solo lectura)
 sgi_sync.py                      genera el Excel y las carpetas de fotos desde SGI + Drive
 *.ps1                            iniciadores de Windows (panel, trabajador, sesiones, paquete)
-legacy/                          generacion anterior, ya no se usa
 tests/                           suite de regresion
 ```
 
@@ -155,7 +154,6 @@ request. Conviene correrlas antes de tocar el publicador o el planificador.
 - [`GUIA_SOCIOS_MARKETPLACE_BOT.md`](GUIA_SOCIOS_MARKETPLACE_BOT.md) — instalacion en computadoras de terceros
 - [`PLAN_BOT_MARKETPLACE_AUTONOMO.md`](PLAN_BOT_MARKETPLACE_AUTONOMO.md) — diseno por fases y estado
 - [`marketplace_campaign_modes.md`](marketplace_campaign_modes.md) — campanas JSON manuales
-- [`legacy/README.md`](legacy/README.md) — la generacion anterior (FiruPost)
 
 ## Aviso
 
