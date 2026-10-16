@@ -554,6 +554,8 @@
     .photo-choice input { position: absolute; top: 5px; left: 5px; width: 17px; height: 17px; margin: 0; accent-color: var(--blue); }
     .photo-choice:has(input:checked) img { border-color: var(--blue); }
     .photo-count { display: block; color: var(--muted); font-size: 11px; margin-top: 6px; }
+    .photo-rounds-card { display: grid; gap: 10px; margin: 10px 0 14px; }
+    .photo-rounds-card .field-help { max-width: 70ch; }
     .photo-order { margin-top: 10px; }
     .photo-order-item { position: relative; width: 72px; }
     .photo-order-item img { width: 72px; height: 72px; object-fit: contain; border: 2px solid var(--border); border-radius: 5px; background: #f7f8fa; display: block; }

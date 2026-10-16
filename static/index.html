@@ -296,8 +296,18 @@
           </details>
 
           <details class="assistant-section fold">
-            <summary><span class="step-label">Fotos</span><h3>Fotos por producto y cuenta</h3><span class="selection-badge">Máximo 10 por publicación</span></summary>
+            <summary><span class="step-label">Fotos</span><h3>Fotos por producto y cuenta</h3><span class="selection-badge" id="autoPhotoBadge">Máximo 10 por publicación</span></summary>
             <p class="muted">Marca las fotos que usará cada cuenta. Usar fotos distintas en cada cuenta evita anuncios repetidos. Pulsa "Guardar reglas" al terminar.</p>
+            <div class="rules-card photo-rounds-card">
+              <div class="field">
+                <label for="autoPhotosPerListing">Publicar el mismo producto varias veces con fotos distintas</label>
+                <div class="input-unit"><input id="autoPhotosPerListing" type="number" min="0" max="10"><span>fotos por publicación</span></div>
+                <small class="field-help">Con 0, cada producto sube todas sus fotos marcadas en un solo anuncio. Con un número (por ejemplo 3), las fotos marcadas son un banco: cada publicación toma las siguientes fotos sin usar de esa cuenta, repartidas por igual (10 fotos con 3 por anuncio dan 4 anuncios de 3, 3, 2 y 2). Hasta 60 fotos por producto.</small>
+              </div>
+              <label class="toggle-line"><input id="autoRotateCover" type="checkbox"> Rotar la portada en cada publicación</label>
+              <label class="toggle-line"><input id="autoStaggerPhotos" type="checkbox"> Cada cuenta empieza con fotos distintas</label>
+              <small class="field-help">Se repite el mismo producto en una cuenta respetando "Esperar antes de repetir un producto" y la protección de cuenta, y el texto cambia en cada publicación.</small>
+            </div>
             <div id="autoPhotoAssignments" class="photo-assignment-list"></div>
           </details>
 

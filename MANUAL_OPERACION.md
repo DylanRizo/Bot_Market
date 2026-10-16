@@ -173,6 +173,40 @@ El bot calcula una huella SHA-256 del **contenido** de cada foto:
 El historial empieza con las publicaciones del nuevo trabajador; las antiguas
 que no guardaron sus rutas no se reconstruyen.
 
+## Varias publicaciones del mismo producto con fotos distintas
+
+Por defecto un producto sube todas sus fotos marcadas en un solo anuncio y, como
+una foto no se repite en la misma cuenta, el producto no vuelve a programarse
+aunque tenga fotos de sobra. Para aprovecharlas, en
+`Automatizacion > Fotos por producto y cuenta` pon un numero en
+`Publicar el mismo producto varias veces con fotos distintas` (por ejemplo 3). Con
+`0` todo funciona como antes.
+
+Con un numero, las fotos marcadas son un **banco** (hasta 60 por producto y
+cuenta) y cada publicacion toma las siguientes fotos sin usar de esa cuenta:
+
+- **Reparto parejo.** 10 fotos con hasta 3 por anuncio dan 4 publicaciones de 3, 3,
+  2 y 2 fotos; nunca queda una ultima con una sola foto. Cada foto sale una vez por
+  cuenta (por contenido), igual que siempre.
+- **Orden.** Las fotos se toman en el orden del banco (el que dejas con las
+  flechas). Con `Rotar la portada en cada publicacion`, cada ronda mueve la portada
+  (123, 231, 312...) para que dos anuncios del mismo producto no abran igual.
+- **Varias cuentas.** Con `Cada cuenta empieza con fotos distintas`, la cuenta 1
+  empieza con el primer bloque, la 2 con el siguiente, etc., y cada una recorre todo
+  el banco con el tiempo. Apagada, todas empiezan con las mismas fotos.
+- **Texto.** La redaccion cambia en cada publicacion (cuenta + semana + ronda), asi
+  que dos anuncios del mismo producto no llevan el mismo texto.
+- **Cuando se acaban las fotos nuevas**, el producto deja de programarse en esa
+  cuenta hasta que agregues fotos reales nuevas, como antes.
+
+El ritmo lo siguen marcando `Esperar antes de repetir un producto` y la
+[proteccion de cuenta](#proteccion-de-cuenta): el mayor de los dos es la espera
+entre dos anuncios del mismo producto en la misma cuenta (7 dias en `balanced`), asi
+que 4 rondas tardan unas 4 semanas. Reducir esa espera acelera las repeticiones,
+pero Marketplace puede marcar como duplicados varios anuncios activos del mismo
+producto en una cuenta aunque cambien las fotos y el texto: sube el ritmo poco a
+poco y vigila las alertas.
+
 ## Varias cuentas
 
 `Automatizacion > Cuentas activas`: marca una o varias y elige

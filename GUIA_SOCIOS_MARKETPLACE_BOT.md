@@ -158,6 +158,10 @@ subas hasta que la cuenta lleve semanas publicando sin avisos. Si Facebook muest
 una restriccion, la cuenta se pausa 72 horas; revisala a mano antes de reanudarla.
 Los detalles estan en el `MANUAL_OPERACION.md`.
 
+Si el socio tiene muchas fotos de un producto, puede publicarlo varias veces con
+fotos distintas: en `Automatizacion > Fotos por producto y cuenta` indica cuantas
+fotos por publicacion (por ejemplo 3). Se explica en el `MANUAL_OPERACION.md`.
+
 Cambiar las fotos guardadas afecta al siguiente calendario generado. Los
 trabajos que ya estaban programados conservan sus fotos anteriores.
 

@@ -21,6 +21,10 @@ Drive y de una carpeta local de respaldo.
   reintentarse, porque el anuncio pudo haberse creado.
 - **Historial de fotos por cuenta.** Una foto publicada en una cuenta no se
   vuelve a programar ahi; la misma foto si puede usarse en otra.
+- **Mismo producto, varias publicaciones.** Con las fotos de un producto como
+  banco, publica el producto varias veces con fotos distintas (por ejemplo 3 por
+  anuncio), rota la portada y cambia el texto en cada ronda. Ver el
+  [manual](MANUAL_OPERACION.md#varias-publicaciones-del-mismo-producto-con-fotos-distintas).
 - **Varias cuentas.** Cada una con su sesion de Chrome, su candado de ejecucion,
   su historial y sus alertas.
 - **Descripciones y etiquetas.** Redaccion comercial local, u opcionalmente

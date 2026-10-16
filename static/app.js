@@ -74,7 +74,30 @@
       autoPhotoDraftDirty = false;
     }
 
+    // "4 publicaciones (3, 3, 2 y 2 fotos)": el mismo reparto parejo que hace el planificador.
+    function photoRoundsLabel(total, perListing) {
+      const sizes = [];
+      let left = total;
+      while (left > 0 && sizes.length < 60) {
+        const size = Math.ceil(left / Math.ceil(left / perListing));
+        sizes.push(size);
+        left -= size;
+      }
+      const list = sizes.length > 1 ? `${sizes.slice(0, -1).join(", ")} y ${sizes[sizes.length - 1]}` : `${sizes[0]}`;
+      return `${sizes.length} ${sizes.length === 1 ? "publicación" : "publicaciones"} (${list} ${sizes.length === 1 && sizes[0] === 1 ? "foto" : "fotos"})`;
+    }
+
+    // Con rondas de fotos las marcadas son un banco (hasta 60); sin ellas, un anuncio (hasta 10).
+    function autoPhotoLimit() {
+      return Number($("autoPhotosPerListing")?.value || 0) > 0 ? 60 : 10;
+    }
+
     function renderAutoPhotoAssignments() {
+      const photoLimit = autoPhotoLimit();
+      const rounds = Number($("autoPhotosPerListing")?.value || 0);
+      $("autoPhotoBadge").textContent = rounds > 0
+        ? `Banco de hasta ${photoLimit} · ${rounds} por publicación`
+        : "Máximo 10 por publicación";
       const accounts = state.accounts?.accounts || {};
       const selectedAccounts = [...$("autoAccounts").querySelectorAll("input:checked")].map(input => input.value);
       const products = automaticProducts();
@@ -111,7 +134,7 @@
           const imagesById = new Map(product.images.map(image => [image.id, image]));
           const ordered = (autoPhotoDraft[account]?.[product.key] || []).filter(id => imagesById.has(id));
           const orderStrip = ordered.length > 1 ? `<div class="photo-order">
-            <span class="photo-color-label">Orden de subida <small>la 1.ª es la portada</small></span>
+            <span class="photo-color-label">${rounds > 0 ? "Orden del banco" : "Orden de subida"} <small>${rounds > 0 ? "cada publicación toma las siguientes fotos" : "la 1.ª es la portada"}</small></span>
             <div class="photo-picker">${ordered.map((id, position) => {
               const image = imagesById.get(id);
               const move = (delta, label, symbol, disabled) => `<button type="button" class="icon-button" data-auto-photo-move="${escapeHtml(id)}" data-auto-photo-account="${escapeHtml(account)}" data-auto-photo-family="${escapeHtml(product.key)}" data-delta="${delta}" title="${label}" aria-label="${label}" ${disabled ? "disabled" : ""}>${symbol}</button>`;
@@ -125,7 +148,7 @@
           return `<div class="photo-account"><strong>${escapeHtml(accounts[account]?.display_name || account)}</strong>
             ${choices || '<span class="muted">Sin fotos disponibles</span>'}
             ${orderStrip}
-            <span class="photo-count">${selected.size} fotos seleccionadas</span>
+            <span class="photo-count">${selected.size} fotos seleccionadas${rounds > 0 && selected.size ? ` · ${photoRoundsLabel(selected.size, rounds)}` : ""}</span>
           </div>`;
         }).join("")}</div>
       </article>`).join("");
@@ -147,9 +170,11 @@
           const account = input.dataset.autoPhotoAccount;
           const family = input.dataset.autoPhotoFamily;
           const selected = new Set(autoPhotoDraft[account]?.[family] || []);
-          if (input.checked && selected.size >= 10) {
+          if (input.checked && selected.size >= photoLimit) {
             input.checked = false;
-            toast("Solo se pueden usar hasta 10 fotos por publicación");
+            toast(photoLimit > 10
+              ? `Solo se pueden reservar hasta ${photoLimit} fotos por producto`
+              : "Solo se pueden usar hasta 10 fotos por publicación");
             return;
           }
           input.checked ? selected.add(input.value) : selected.delete(input.value);
@@ -440,6 +465,14 @@
       $("autoInterval").value = config.interval_minutes ?? 180;
       $("autoCooldown").value = config.cooldown_days ?? 3;
       $("autoJitter").value = config.slot_jitter_minutes ?? 7;
+      $("autoPhotosPerListing").value = config.photos_per_listing ?? 0;
+      $("autoRotateCover").checked = config.rotate_cover !== false;
+      $("autoStaggerPhotos").checked = config.stagger_account_photos !== false;
+      ["autoPhotosPerListing", "autoRotateCover", "autoStaggerPhotos"].forEach(id => $(id).onchange = () => {
+        autoPhotoDraftDirty = true;
+        setDirty();
+        renderAutoPhotoAssignments();
+      });
 
       const dayNames = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
       const activeDays = new Set(config.active_days || []);
@@ -716,6 +749,9 @@
         interval_minutes: Number($("autoInterval").value || 180),
         cooldown_days: Number($("autoCooldown").value || 0),
         slot_jitter_minutes: Number($("autoJitter").value || 0),
+        photos_per_listing: Math.max(0, Math.min(10, Number($("autoPhotosPerListing").value || 0))),
+        rotate_cover: $("autoRotateCover").checked,
+        stagger_account_photos: $("autoStaggerPhotos").checked,
         active_days: [...$("autoDays").querySelectorAll("input:checked")].map(input => Number(input.value)),
         selected_families: [...$("autoFamilies").querySelectorAll("input:checked")].map(input => input.value),
         account_photo_assignments: autoPhotoDraft,

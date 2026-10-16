@@ -9,6 +9,7 @@ from typing import Any
 
 from marketplace_catalog import ASSISTANT_PRESETS, build_family_jobs, catalog_families
 from marketplace_custom_products import custom_rotation_jobs
+from marketplace_photo_rounds import MAX_LISTING_PHOTOS, MAX_POOL_PHOTOS, plan_round
 from marketplace_safety import load_safety, warmup_cap
 from marketplace_storage import DEFAULT_DB, MarketplaceStore, listing_fingerprint
 
@@ -33,6 +34,9 @@ DEFAULT_AUTONOMY_CONFIG: dict[str, Any] = {
     "max_attempts": 2,
     "retry_delay_minutes": 30,
     "slot_jitter_minutes": 7,
+    "photos_per_listing": 0,
+    "rotate_cover": True,
+    "stagger_account_photos": True,
     "selected_families": list(ASSISTANT_PRESETS),
     "family_modes": {},
     "ai_descriptions": False,
@@ -74,6 +78,11 @@ def normalize_config(raw: dict[str, Any] | None = None) -> dict[str, Any]:
     config["max_attempts"] = max(1, min(int(config.get("max_attempts") or 2), 5))
     config["retry_delay_minutes"] = max(5, int(config.get("retry_delay_minutes") or 30))
     config["slot_jitter_minutes"] = max(0, min(int(config.get("slot_jitter_minutes") or 0), 30))
+    # 0 = un anuncio con todas las fotos seleccionadas (como antes). Con un numero,
+    # el producto se publica varias veces con fotos distintas (marketplace_photo_rounds).
+    config["photos_per_listing"] = max(0, min(int(config.get("photos_per_listing") or 0), MAX_LISTING_PHOTOS))
+    config["rotate_cover"] = bool(config.get("rotate_cover", True))
+    config["stagger_account_photos"] = bool(config.get("stagger_account_photos", True))
     config["selected_families"] = [
         key for key in config.get("selected_families", []) if key in ASSISTANT_PRESETS
     ] or list(ASSISTANT_PRESETS)
@@ -85,7 +94,7 @@ def normalize_config(raw: dict[str, Any] | None = None) -> dict[str, Any]:
         if not isinstance(assignments, dict):
             continue
         account_media[str(account)] = {
-            str(family): [str(path) for path in paths[:10] if str(path).strip()]
+            str(family): [str(path) for path in paths[:MAX_POOL_PHOTOS] if str(path).strip()]
             for family, paths in assignments.items()
             if isinstance(paths, list) and paths
         }
@@ -177,9 +186,8 @@ def _eligible_candidate(
     return scheduled_at - last_used[family] >= timedelta(days=cooldown_days)
 
 
-def job_for_account(job: dict[str, Any], account: str, config: dict[str, Any]) -> dict[str, Any]:
-    account_job = dict(job)
-    account_job["account"] = account
+def assigned_paths(job: dict[str, Any], account: str, config: dict[str, Any]) -> list[str]:
+    """Fotos que el usuario reservo para este producto y cuenta, en su orden."""
     family = str(job.get("family_key") or "")
     assigned = list((config.get("account_media") or {}).get(account, {}).get(family) or [])
     prefixes = tuple(str(prefix).upper() for prefix in job.get("sku_prefixes") or [])
@@ -189,9 +197,18 @@ def job_for_account(job: dict[str, Any], account: str, config: dict[str, Any]) -
         assigned = [
             path for path in assigned if Path(path).parent.name.upper().startswith(prefixes) and Path(path).is_file()
         ]
+    return assigned
+
+
+def job_for_account(job: dict[str, Any], account: str, config: dict[str, Any]) -> dict[str, Any]:
+    account_job = dict(job)
+    account_job["account"] = account
+    # Con rondas de fotos el banco puede pasar de 10; cada anuncio solo toma una parte.
+    limit = MAX_POOL_PHOTOS if config.get("photos_per_listing") else MAX_LISTING_PHOTOS
+    assigned = assigned_paths(job, account, config)
     if assigned:
         overrides = dict(job.get("listing_overrides") or {})
-        overrides["image_paths"] = list(assigned[:10])
+        overrides["image_paths"] = list(assigned[:limit])
         account_job["listing_overrides"] = overrides
     return account_job
 
@@ -227,7 +244,10 @@ def generate_week(
             except ValueError:
                 continue
     existing = store.list_queue(statuses=["planned", "queued", "running", "retry", "published"], limit=2000)
-    reserved_media: set[tuple[str, str]] = set()
+    reserved_media: dict[str, set[str]] = {}
+    per_listing = config["photos_per_listing"]
+    used_hashes = {account: store.used_media_hashes(account) for account in config["accounts"]} if per_listing else {}
+    rounds_done: dict[tuple[str, str], int] = {}
     per_account_day: dict[tuple[str, str], int] = {}
     first_publication = {account: store.first_publish_event(account) for account in config["accounts"]}
 
@@ -248,8 +268,41 @@ def generate_week(
         key = (item["account"], family)
         if key not in last_used or moment > last_used[key]:
             last_used[key] = moment
+        rounds_done[key] = rounds_done.get(key, 0) + 1
         for image in store.job_image_paths(item.get("job") or {}):
-            reserved_media.add((item["account"], store.image_hash(image)))
+            reserved_media.setdefault(item["account"], set()).add(store.image_hash(image))
+
+    def build_account_job(candidate: dict[str, Any], account: str) -> dict[str, Any] | None:
+        """El anuncio de este producto en esta cuenta; None si ya no le quedan fotos nuevas."""
+        job = job_for_account(candidate, account, config)
+        pool = job.pop("photo_pool", None)
+        if not per_listing:
+            return job
+        family = str(candidate.get("family_key") or "")
+        banco = assigned_paths(candidate, account, config) or [
+            str(path) for path in (pool or store.job_image_paths(candidate)) if Path(str(path)).is_file()
+        ]
+        blocked = used_hashes.get(account, set()) | reserved_media.get(account, set())
+        round_number = rounds_done.get((account, family), 0)
+        chunk = plan_round(
+            banco[:MAX_POOL_PHOTOS],
+            per_listing=per_listing,
+            hash_of=lambda path: store.image_hash(Path(path)),
+            blocked=blocked,
+            account_index=config["accounts"].index(account) if config["stagger_account_photos"] else 0,
+            round_number=round_number,
+            rotate_cover=config["rotate_cover"],
+            stagger=config["stagger_account_photos"],
+        )
+        if not chunk:
+            return None
+        overrides = dict(job.get("listing_overrides") or {})
+        overrides["image_paths"] = chunk
+        job["listing_overrides"] = overrides
+        # El texto del anuncio cambia con cada ronda: dos anuncios del mismo producto
+        # en la misma cuenta y semana no deben salir con la misma redaccion.
+        job["copy_variant"] = round_number
+        return job
 
     jobs = sorted(
         family_jobs,
@@ -276,7 +329,9 @@ def generate_week(
             family = str(candidate.get("family_key") or "")
             eligible_accounts: list[str] = []
             for account in target_accounts:
-                account_candidate = job_for_account(candidate, account, config)
+                account_candidate = build_account_job(candidate, account)
+                if account_candidate is None:
+                    continue
                 images = store.job_image_paths(account_candidate)
                 used_at = last_used.get((account, family))
                 cooldown_ok = used_at is None or slot - used_at >= timedelta(days=cooldown_days)
@@ -285,7 +340,7 @@ def generate_week(
                     and per_account_day.get((account, slot.date().isoformat()), 0) >= day_cap(account, slot)
                 )
                 published_conflict = bool(store.media_conflicts(account, images))
-                reserved_conflict = any((account, store.image_hash(image)) in reserved_media for image in images)
+                reserved_conflict = any(store.image_hash(image) in reserved_media.get(account, ()) for image in images)
                 if cooldown_ok and not day_full and not published_conflict and not reserved_conflict:
                     eligible_accounts.append(account)
             if eligible_accounts:
@@ -306,7 +361,9 @@ def generate_week(
         for account_index, account in enumerate(selected_accounts):
             account_slot = slot + timedelta(minutes=account_index * stagger)
             scheduled_text = account_slot.isoformat(timespec="seconds")
-            account_job = job_for_account(selected, account, config)
+            account_job = build_account_job(selected, account)
+            if account_job is None:
+                continue
             fingerprint = listing_fingerprint(account_job, account)
             queue_id, was_created = store.enqueue(
                 {
@@ -328,8 +385,9 @@ def generate_week(
                 day_key = (account, account_slot.date().isoformat())
                 per_account_day[day_key] = per_account_day.get(day_key, 0) + 1
                 last_used[(account, family)] = account_slot
+                rounds_done[(account, family)] = rounds_done.get((account, family), 0) + 1
                 for image in store.job_image_paths(account_job):
-                    reserved_media.add((account, store.image_hash(image)))
+                    reserved_media.setdefault(account, set()).add(store.image_hash(image))
     return {
         "created": len(created),
         "ids": created,

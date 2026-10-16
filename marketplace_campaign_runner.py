@@ -209,7 +209,11 @@ def build_dynamic_jobs(
         # Misma cuenta y misma semana dan el mismo texto; otra cuenta u otra
         # semana, otra redaccion. Asi dos cuentas no suben anuncios identicos.
         week = datetime.now().isocalendar()
-        command.extend(["--variant-seed", f"{account_key}|{week[0]}-W{week[1]:02d}"])
+        seed = f"{account_key}|{week[0]}-W{week[1]:02d}"
+        if job.get("copy_variant"):
+            # Rondas de fotos: la misma cuenta y semana, pero otra ronda, otro texto.
+            seed += f"|r{job['copy_variant']}"
+        command.extend(["--variant-seed", seed])
     ai_enabled = bool(job.get("ai_descriptions", defaults.get("ai_descriptions", False)))
     if ai_enabled:
         command.append("--ai-descriptions")
