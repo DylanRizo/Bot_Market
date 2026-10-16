@@ -23,12 +23,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 ArticulosGenerados.xlsx
-Articulos_FiruPost.xlsx
-_firupost_raw_sync.xlsx
-firupost_validation_report.xlsx
-firupost_session_config.json
-firupost_grouped_listings/
-firupost_test_batch/
 marketplace_campaign_generated*/
 marketplace_campaign_uploads/
 marketplace_test_uploads/
