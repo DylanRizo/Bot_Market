@@ -520,6 +520,12 @@ class MarketplaceStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def used_media_hashes(self, account: str) -> set[str]:
+        """Hashes de todas las fotos que esa cuenta ya publico."""
+        with self.connect() as connection:
+            rows = connection.execute("SELECT image_hash FROM media_usage WHERE account=?", (account,)).fetchall()
+        return {str(row["image_hash"]) for row in rows}
+
     def record_media_usage(self, queue_id: str) -> int:
         item = self.get_queue_item(queue_id)
         if not item:

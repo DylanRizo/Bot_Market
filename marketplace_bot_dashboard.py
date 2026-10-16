@@ -25,6 +25,7 @@ import pandas as pd
 
 from marketplace_catalog import ASSISTANT_PRESETS, STYLE_TO_MODE
 from marketplace_custom_products import CUSTOM_ROOT, create_custom_product
+from marketplace_photo_rounds import MAX_LISTING_PHOTOS, MAX_POOL_PHOTOS
 from marketplace_runtime import IMAGES_DIR_NAME, images_root, process_exists
 from marketplace_safety import (
     LEVELS as SAFETY_LEVELS,
@@ -442,7 +443,7 @@ def normalize_listing_overrides(payload: dict[str, Any], families: list[str]) ->
         if media_ids:
             if not isinstance(media_ids, list):
                 raise ValueError("Las fotos deben ser una lista.")
-            override["image_paths"] = [str(media_path_from_id(media_id)) for media_id in media_ids[:10]]
+            override["image_paths"] = [str(media_path_from_id(media_id)) for media_id in media_ids[:MAX_LISTING_PHOTOS]]
         if "tags" in raw:
             raw_tags = raw.get("tags")
             if not isinstance(raw_tags, list):
@@ -983,7 +984,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 for family, media_ids in families.items():
                     if not isinstance(media_ids, list):
                         continue
-                    paths = [str(media_path_from_id(str(media_id))) for media_id in media_ids[:10]]
+                    paths = [str(media_path_from_id(str(media_id))) for media_id in media_ids[:MAX_POOL_PHOTOS]]
                     if paths:
                         account_media[str(account)][str(family)] = paths
             raw_config["account_media"] = account_media
@@ -1000,7 +1001,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         media_ids = payload.get("image_ids") or []
         if not isinstance(media_ids, list):
             raise ValueError("Las fotos deben ser una lista.")
-        source_images = [media_path_from_id(str(media_id)) for media_id in media_ids[:10]]
+        source_images = [media_path_from_id(str(media_id)) for media_id in media_ids[:MAX_LISTING_PHOTOS]]
         product = create_custom_product(STORE, payload, source_images)
         self.send_json({"ok": True, "product": product, "autonomy": autonomy_payload()})
 

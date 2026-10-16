@@ -247,6 +247,9 @@ def build_family_jobs(
         for filter_key in ("sku_prefixes", "skus", "title_contains", "exclude_title_contains"):
             if preset.get(filter_key):
                 job[filter_key] = preset[filter_key]
+        # Todas las fotos distintas de la familia: el banco del que reparte las
+        # rondas de fotos (photos_per_listing). El planificador lo quita del anuncio.
+        job["photo_pool"] = family.get("image_options") or []
         overrides = dict(source.get("listing_overrides") or {})
         if not overrides.get("image_paths"):
             overrides["image_paths"] = family.get("image_paths") or []

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -237,3 +238,115 @@ def test_generate_week_falla_claro_si_no_hay_productos(store, monkeypatch):
     monkeypatch.setattr(scheduler, "custom_rotation_jobs", lambda *a, **k: [])
     with pytest.raises(RuntimeError, match="No hay familias"):
         generate_week(store, base_config())
+
+
+# --- varias publicaciones del mismo producto con fotos distintas -------------
+
+def sin_proteccion(store) -> None:
+    from marketplace_safety import save_safety
+
+    save_safety(store, {"enabled": False})
+
+
+def fotos_de(store, item) -> list[str]:
+    return [Path(path).name for path in store.job_image_paths(item["job"])]
+
+
+def test_sin_rondas_un_producto_sube_todas_sus_fotos_en_un_solo_anuncio(store, catalogo):
+    sin_proteccion(store)
+    catalogo(familias=1, fotos_por_familia=10)
+    config = base_config(horizon_days=3, cooldown_days=0)
+    generate_week(store, config, start_date=date.today() + timedelta(days=1))
+    cola = store.list_queue()
+    assert len(cola) == 1 and len(fotos_de(store, cola[0])) == 10
+
+
+def test_con_rondas_el_producto_se_publica_varias_veces_con_fotos_distintas(store, catalogo):
+    sin_proteccion(store)
+    catalogo(familias=1, fotos_por_familia=10)
+    config = base_config(horizon_days=3, cooldown_days=0, photos_per_listing=3)
+    resultado = generate_week(store, config, start_date=date.today() + timedelta(days=1))
+
+    cola = sorted(store.list_queue(), key=lambda item: item["scheduled_at"])
+    assert [len(fotos_de(store, item)) for item in cola] == [3, 3, 2, 2]
+    todas = [foto for item in cola for foto in fotos_de(store, item)]
+    assert len(todas) == len(set(todas)) == 10, "cada foto sale una sola vez"
+    assert resultado["skipped_slots"] > 0, "sin fotos nuevas no se inventan mas anuncios"
+    # La portada rota: la ronda 2 no abre con la primera foto de su bloque.
+    originales = [str(path) for path in store.job_image_paths({"image_paths": catalogo_paths(cola)})]
+    assert fotos_de(store, cola[0])[0] == Path(originales[0]).name
+    assert fotos_de(store, cola[1])[0] == Path(originales[4]).name
+    assert [item["job"]["copy_variant"] for item in cola] == [0, 1, 2, 3]
+    assert len({item["fingerprint"] for item in cola}) == 4
+
+
+def catalogo_paths(cola):
+    """Las 10 fotos del producto en el orden original, sin importar la rotacion."""
+    paths = [path for item in cola for path in item["job"]["listing_overrides"]["image_paths"]]
+    return sorted(paths, key=lambda path: int(Path(path).stem.split("_")[1]))
+
+
+def test_las_fotos_ya_publicadas_no_vuelven_a_entrar_en_una_ronda(store, catalogo):
+    from conftest import enqueue_job
+
+    sin_proteccion(store)
+    trabajos = catalogo(familias=1, fotos_por_familia=10)
+    publicadas = trabajos[0]["image_paths"][:3]
+    queue_id = enqueue_job(store, family_key="familia0", job={"family_key": "familia0", "image_paths": publicadas})
+    store.record_media_usage(queue_id)
+
+    config = base_config(horizon_days=3, cooldown_days=0, photos_per_listing=3)
+    generate_week(store, config, start_date=date.today() + timedelta(days=1))
+    nuevos = [item for item in store.list_queue() if item["id"] != queue_id]
+    assert [len(fotos_de(store, item)) for item in sorted(nuevos, key=lambda item: item["scheduled_at"])] == [3, 2, 2]
+    usadas = {Path(path).name for path in publicadas}
+    assert not usadas & {foto for item in nuevos for foto in fotos_de(store, item)}
+
+
+def test_cada_cuenta_recibe_bloques_distintos_en_el_mismo_espacio(store, catalogo):
+    sin_proteccion(store)
+    catalogo(familias=1, fotos_por_familia=10)
+    config = base_config(
+        accounts=["cuenta1", "cuenta2"], account_strategy="all_accounts",
+        horizon_days=1, max_per_day=1, cooldown_days=0, photos_per_listing=3, rotate_cover=False,
+    )
+    generate_week(store, config, start_date=date.today() + timedelta(days=1))
+    por_cuenta = {item["account"]: fotos_de(store, item) for item in store.list_queue()}
+    assert set(por_cuenta) == {"cuenta1", "cuenta2"}
+    assert not set(por_cuenta["cuenta1"]) & set(por_cuenta["cuenta2"])
+
+
+def test_con_la_opcion_apagada_todas_las_cuentas_empiezan_igual(store, catalogo):
+    sin_proteccion(store)
+    catalogo(familias=1, fotos_por_familia=10)
+    config = base_config(
+        accounts=["cuenta1", "cuenta2"], account_strategy="all_accounts",
+        horizon_days=1, max_per_day=1, cooldown_days=0, photos_per_listing=3,
+        rotate_cover=False, stagger_account_photos=False,
+    )
+    generate_week(store, config, start_date=date.today() + timedelta(days=1))
+    por_cuenta = {item["account"]: fotos_de(store, item) for item in store.list_queue()}
+    assert por_cuenta["cuenta1"] == por_cuenta["cuenta2"]
+
+
+def test_la_seleccion_de_fotos_del_usuario_es_el_banco_y_respeta_su_orden(store, catalogo):
+    sin_proteccion(store)
+    trabajos = catalogo(familias=1, fotos_por_familia=10)
+    elegidas = list(reversed(trabajos[0]["image_paths"][:6]))
+    config = base_config(
+        horizon_days=3, cooldown_days=0, photos_per_listing=3, rotate_cover=False,
+        account_media={"cuenta1": {"familia0": elegidas}},
+    )
+    generate_week(store, config, start_date=date.today() + timedelta(days=1))
+    cola = sorted(store.list_queue(), key=lambda item: item["scheduled_at"])
+    assert [fotos_de(store, item) for item in cola] == [
+        [Path(p).name for p in elegidas[:3]],
+        [Path(p).name for p in elegidas[3:]],
+    ]
+
+
+def test_normalize_config_acota_las_fotos_por_publicacion():
+    assert normalize_config({"photos_per_listing": 99})["photos_per_listing"] == 10
+    assert normalize_config({"photos_per_listing": -3})["photos_per_listing"] == 0
+    assert normalize_config({})["photos_per_listing"] == 0
+    assert normalize_config({})["rotate_cover"] is True

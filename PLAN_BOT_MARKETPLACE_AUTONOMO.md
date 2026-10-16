@@ -17,6 +17,9 @@ Extensiones posteriores al plan original:
 - Proteccion de cuenta (`marketplace_safety.py`): limites por cuenta,
   calentamiento, pausas por fallos o restriccion, revision del texto y variacion
   de redaccion por cuenta.
+- Rondas de fotos (`marketplace_photo_rounds.py`): un producto se publica varias
+  veces con fotos distintas, con reparto parejo, portada rotativa y bloques
+  distintos por cuenta.
 - Variacion estable de horarios y reintentos con espera progresiva.
 - Proteccion contra duplicados mediante marca previa a `Publish`
   (`PUBLISH_OUTCOME_UNKNOWN`).

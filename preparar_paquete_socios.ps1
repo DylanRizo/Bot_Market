@@ -25,6 +25,7 @@ $files = @(
     "marketplace_catalog.py",
     "marketplace_custom_products.py",
     "marketplace_listing_builder.py",
+    "marketplace_photo_rounds.py",
     "marketplace_runtime.py",
     "marketplace_safety.py",
     "marketplace_scheduler.py",
