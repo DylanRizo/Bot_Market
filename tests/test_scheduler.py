@@ -118,7 +118,7 @@ def catalogo(monkeypatch, photo):
                     "family_key": f"familia{indice}",
                     "image_paths": imagenes,
                     "excel": "ArticulosGenerados.xlsx",
-                    "images_root": "imagenes_firupost",
+                    "images_root": "imagenes_productos",
                 }
             )
         monkeypatch.setattr(scheduler, "build_family_jobs", lambda *a, **k: list(jobs))

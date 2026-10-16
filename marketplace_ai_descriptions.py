@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_MODEL = os.environ.get("FIRUPOST_OPENAI_MODEL", "gpt-5.6-luna")
+DEFAULT_MODEL = os.environ.get("OPENAI_MODEL") or os.environ.get("FIRUPOST_OPENAI_MODEL") or "gpt-5.6-luna"
 DEFAULT_TONE = "directo, cercano y profesional"
-SECRET_PATH = Path(__file__).resolve().parent / ".firupost_openai_key.bin"
+SECRET_PATH = Path(__file__).resolve().parent / ".openai_key.bin"
+LEGACY_SECRET_PATH = Path(__file__).resolve().parent / ".firupost_openai_key.bin"
 
 DEVELOPER_PROMPT = """Escribe una descripcion de venta para Facebook Marketplace en espanol de Nicaragua.
 Usa entre 70 y 120 palabras, texto sencillo y un tono directo, cercano y profesional.
@@ -28,12 +29,13 @@ def load_api_key() -> str:
     environment_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if environment_key:
         return environment_key
-    if not SECRET_PATH.is_file():
+    secret_path = SECRET_PATH if SECRET_PATH.is_file() else LEGACY_SECRET_PATH
+    if not secret_path.is_file():
         return ""
     try:
         import win32crypt
 
-        encrypted = SECRET_PATH.read_bytes()
+        encrypted = secret_path.read_bytes()
         return win32crypt.CryptUnprotectData(encrypted, None, None, None, 0)[1].decode("utf-8").strip()
     except Exception:
         return ""
@@ -48,7 +50,7 @@ def save_api_key(api_key: str) -> None:
 
         encrypted = win32crypt.CryptProtectData(
             key.encode("utf-8"),
-            "FiruPost OpenAI API key",
+            "Marketplace Bot OpenAI API key",
             None,
             None,
             None,

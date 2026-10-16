@@ -13,7 +13,7 @@ y una lista `jobs`. En cada job eliges como publicar los productos con `listing_
 ```json
 {
   "default_account": "cuenta1",
-  "jobs": [ { "name": "...", "listing_mode": "individual", "source_excel": "ArticulosGenerados.xlsx", "images_root": "imagenes_firupost" } ]
+  "jobs": [ { "name": "...", "listing_mode": "individual", "source_excel": "ArticulosGenerados.xlsx", "images_root": "imagenes_productos" } ]
 }
 ```
 
@@ -26,7 +26,7 @@ Publica cada talla/color como un anuncio separado.
   "name": "Camisas sin mangas individuales",
   "listing_mode": "individual",
   "source_excel": "ArticulosGenerados.xlsx",
-  "images_root": "imagenes_firupost",
+  "images_root": "imagenes_productos",
   "title_contains": ["sin mangas"],
   "item_interval_minutes": 60
 }
@@ -41,7 +41,7 @@ Publica todos los productos seleccionados en un solo anuncio, con varias fotos y
   "name": "Camisas manga corta agrupadas",
   "listing_mode": "grouped",
   "source_excel": "ArticulosGenerados.xlsx",
-  "images_root": "imagenes_firupost",
+  "images_root": "imagenes_productos",
   "sku_prefixes": ["TS"]
 }
 ```
@@ -56,7 +56,7 @@ Hace un anuncio por cada color. Ejemplo: una publicacion para negro con tallas S
   "listing_mode": "grouped",
   "group_by": "color",
   "source_excel": "ArticulosGenerados.xlsx",
-  "images_root": "imagenes_firupost",
+  "images_root": "imagenes_productos",
   "title_contains": ["sin mangas"],
   "item_interval_minutes": 60
 }
@@ -72,7 +72,7 @@ Hace un anuncio por cada talla. Ejemplo: una publicacion talla M con colores neg
   "listing_mode": "grouped",
   "group_by": "size",
   "source_excel": "ArticulosGenerados.xlsx",
-  "images_root": "imagenes_firupost",
+  "images_root": "imagenes_productos",
   "sku_prefixes": ["TS"],
   "item_interval_minutes": 60
 }

@@ -154,6 +154,11 @@ En `Automatizacion > Fotos definidas por producto y cuenta` marcas las miniatura
 que usara cada producto en cada cuenta y pulsas `Guardar reglas`. Se aplica al
 siguiente calendario; lo ya programado conserva sus fotos.
 
+Debajo de las miniaturas aparece `Orden de subida` (con 2 o mas fotos marcadas):
+mueve cada foto con las flechas `←` `→`. **La primera es la portada** y ese es el
+orden en que se suben a Facebook. Las fotos que marcas despues se agregan al
+final. El orden es propio de cada producto y cuenta.
+
 El bot calcula una huella SHA-256 del **contenido** de cada foto:
 
 - Una foto publicada en una cuenta no vuelve a programarse en esa cuenta; en
@@ -191,7 +196,7 @@ se genera una local. El producto se guarda en `marketplace_custom_products/`
 
 ## Fuentes de inventario
 
-El bot lee `ArticulosGenerados.xlsx` y la carpeta `imagenes_firupost`. Se
+El bot lee `ArticulosGenerados.xlsx` y la carpeta `imagenes_productos`. Se
 generan de dos maneras:
 
 ### SGI La Comarca + Google Drive (recomendada)
@@ -221,16 +226,16 @@ Los archivos locales de esta integracion (`.sgi_integration_key.bin`,
 ### Fotos locales de respaldo
 
 Si un producto no tiene fotos en Drive, el bot usa las de la carpeta local
-`imagenes_firupost/<CODIGO>/` (hasta 10, ordenadas por nombre). Si no hay en
+`imagenes_productos/<CODIGO>/` (hasta 10, ordenadas por nombre). Si no hay en
 ninguno de los dos sitios, el producto se descarta con `NO_PHOTOS`.
 
 ## Descripciones con IA
 
 Opcional; sin clave el bot usa redaccion comercial local. Se configura desde el
 panel (`/api/ai/configure`): la clave se guarda cifrada con DPAPI en
-`.firupost_openai_key.bin`, ligada al usuario de Windows, y no se copia a otra
-computadora. El modelo por defecto sale de `FIRUPOST_OPENAI_MODEL`. Tambien se
-lee `OPENAI_API_KEY` si esta definida.
+`.openai_key.bin`, ligada al usuario de Windows, y no se copia a otra
+computadora. El modelo por defecto sale de `OPENAI_MODEL`. Tambien se lee
+`OPENAI_API_KEY` si esta definida.
 
 ## Herramientas de linea de comandos
 
@@ -270,7 +275,28 @@ Datos locales (ninguno se versiona; ver `.gitignore`):
 
 Variables: `MARKETPLACE_BOT_DB` (ruta alternativa de la base),
 `SGI_INTEGRATION_KEY` (llave del SGI sin pasar por el panel), `OPENAI_API_KEY` y
-`FIRUPOST_OPENAI_MODEL` (IA).
+`OPENAI_MODEL` (IA).
+
+## Migrar una instalacion anterior
+
+Antes la carpeta de fotos locales era `imagenes_firupost`, la clave de IA estaba en
+`.firupost_openai_key.bin` y el modelo en `FIRUPOST_OPENAI_MODEL`. **Una
+instalacion anterior sigue funcionando sin tocar nada**: el bot usa la carpeta y
+la clave antiguas si son las unicas que existen, y acepta la variable antigua.
+
+Para pasar a los nombres actuales, con el panel y el trabajador detenidos:
+
+```powershell
+python migrar_nombres_antiguos.py --dry-run   # muestra lo que haria
+python migrar_nombres_antiguos.py
+```
+
+Renombra la carpeta a `imagenes_productos` y la clave a `.openai_key.bin`, y
+reescribe en la base de datos y en los JSON de actividad y campana las rutas de
+fotos que mencionan el nombre anterior (guarda una copia `.bak-<fecha>` de cada
+archivo que cambia). Si ya existen las dos carpetas, no toca nada y avisa para que
+las unas a mano. La variable `FIRUPOST_OPENAI_MODEL` se renombra tu mismo a
+`OPENAI_MODEL`.
 
 ## Codigos de alerta
 

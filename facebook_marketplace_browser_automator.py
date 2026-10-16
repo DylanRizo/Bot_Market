@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
+from marketplace_runtime import images_root
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver import ChromeOptions
@@ -24,7 +25,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 DEFAULT_EXCEL = SCRATCH_DIR / "ArticulosGenerados.xlsx"
-DEFAULT_IMAGES = SCRATCH_DIR / "imagenes_firupost"
+DEFAULT_IMAGES = images_root(SCRATCH_DIR)
 DEFAULT_PROFILE = Path.home() / "AppData" / "Local" / "MarketplaceBot_cuenta1"
 CREATE_URL = "https://www.facebook.com/marketplace/create/item"
 FAILURES_DIR = Path(__file__).resolve().parent / "marketplace_failures"

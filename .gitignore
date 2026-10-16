@@ -1,6 +1,7 @@
 # --- Secretos y credenciales: nunca deben entrar al repositorio ---
 credenciales_google.json
 token_google.json
+.openai_key.bin
 .firupost_openai_key.bin
 marketplace_dashboard_token.txt
 *.key
@@ -32,6 +33,7 @@ marketplace_test_uploads/
 # --- Capturas de diagnostico ---
 *.png
 *.jpg
+imagenes_productos/
 imagenes_firupost/
 
 # Configuracion local con datos propios

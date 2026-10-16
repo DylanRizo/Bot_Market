@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from marketplace_runtime import alias_images_path
 from marketplace_safety import backfill_events, check_can_publish
 from marketplace_scheduler import generate_week, load_config
 from marketplace_storage import DEFAULT_DB, MarketplaceStore, now_iso
@@ -102,7 +103,7 @@ def resolve_path(value: str | None) -> Path | None:
     if not value:
         return None
     path = Path(value)
-    return path if path.is_absolute() else SCRATCH_DIR / path
+    return alias_images_path(path if path.is_absolute() else SCRATCH_DIR / path)
 
 
 def preflight(item: dict[str, Any], config: dict[str, Any]) -> tuple[bool, str, str]:
@@ -193,8 +194,9 @@ def campaign_for_item(item: dict[str, Any], config: dict[str, Any]) -> Path:
     job = dict(item["job"])
     for key in ("source_excel", "excel", "images_root", "output_dir"):
         value = job.get(key)
-        if value and not Path(str(value)).is_absolute():
-            job[key] = str((SCRATCH_DIR / str(value)).resolve())
+        if value:
+            resolved = resolve_path(str(value))
+            job[key] = str(resolved if Path(str(value)).is_absolute() else resolved.resolve())
     job["intent_file"] = str(intent_path_for(item["id"]))
     payload = {
         "default_account": item["account"],

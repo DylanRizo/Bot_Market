@@ -49,7 +49,7 @@ Para crear un ZIP sin inventario:
 powershell -ExecutionPolicy Bypass -File ".\preparar_paquete_socios.ps1"
 ```
 
-Para incluir `ArticulosGenerados.xlsx` y `imagenes_firupost`:
+Para incluir `ArticulosGenerados.xlsx` y `imagenes_productos`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\preparar_paquete_socios.ps1" -IncludeCatalog
@@ -102,7 +102,7 @@ powershell -ExecutionPolicy Bypass -File ".\iniciar_panel_marketplace.ps1"
    iniciador en lugar de escribir la direccion a mano.
 
 Si el paquete no incluyo catalogo, copia `ArticulosGenerados.xlsx` y la carpeta
-`imagenes_firupost` junto a los archivos del bot antes de generar un calendario.
+`imagenes_productos` junto a los archivos del bot antes de generar un calendario.
 
 ## 5. Configurar la cuenta privada del socio
 
@@ -143,7 +143,8 @@ debe usar un puerto y una carpeta de Chrome diferentes.
 4. Marca las cuentas, dias, horario, maximo diario e intervalo.
 5. Selecciona los productos del catalogo.
 6. En `Fotos definidas por producto y cuenta`, marca las fotos permitidas para
-   cada cuenta. Puede usarse la misma foto en cuentas diferentes.
+   cada cuenta. Puede usarse la misma foto en cuentas diferentes. En `Orden de
+   subida` ordena las fotos con las flechas; la primera es la portada.
 7. Pulsa `Guardar reglas`.
 8. Pulsa `Generar semana` y revisa el calendario.
 9. Aprueba solo los trabajos correctos.
@@ -220,7 +221,7 @@ en la ventana de Chrome correspondiente.
 `IMAGE_REUSED`: esa foto ya fue registrada para la cuenta; selecciona fotos
 reales nuevas o utiliza otra cuenta.
 
-`No hay productos`: revisa que el Excel y `imagenes_firupost` esten en la
+`No hay productos`: revisa que el Excel y `imagenes_productos` esten en la
 carpeta del bot y que las rutas del inventario correspondan a sus fotos.
 
 `ACCOUNT_RESTRICTED`: Facebook mostro un aviso de limite o restriccion y el bot
@@ -236,13 +237,13 @@ Con el bot y el trabajador detenidos, respalda de forma privada:
 
 - `marketplace_bot.db`.
 - `ArticulosGenerados.xlsx`.
-- `imagenes_firupost`.
+- `imagenes_productos`.
 - `marketplace_custom_products`.
 - `marketplace_accounts.json`.
 - `marketplace_integrations.json`, si usa el SGI.
 
 Cada socio debe guardar su respaldo en un espacio privado. No debe entregar a
-otros socios `marketplace_bot.db`, `.firupost_openai_key.bin`, tokens, logs ni
+otros socios `marketplace_bot.db`, `.openai_key.bin`, tokens, logs ni
 su carpeta `%LOCALAPPDATA%\MarketplaceBot_*`.
 
 La clave de OpenAI guardada desde el panel queda protegida por Windows para el

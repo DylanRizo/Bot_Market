@@ -1,7 +1,7 @@
 """Sincroniza el catalogo del SGI y las fotos de Drive con el bot.
 
 Genera los mismos artefactos que el resto del pipeline ya consume:
-``ArticulosGenerados.xlsx`` y ``imagenes_firupost/<FAMILIA-COLOR>/foto_N.ext``.
+``ArticulosGenerados.xlsx`` y ``imagenes_productos/<FAMILIA-COLOR>/foto_N.ext``.
 Una foto de color sirve para todas las tallas, asi que se guarda una sola vez y
 cada talla del Excel apunta a la carpeta de su color.
 
@@ -27,12 +27,13 @@ from typing import Any, Callable, Iterable
 import pandas as pd
 
 from drive_photos import DrivePhoto, product_group
+from marketplace_runtime import images_root
 from sgi_client import PRICE_ISSUE_LABELS, CatalogItem
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 INVENTORY_PATH = SCRATCH_DIR / "ArticulosGenerados.xlsx"
-IMAGES_ROOT = SCRATCH_DIR / "imagenes_firupost"
+IMAGES_ROOT = images_root(SCRATCH_DIR)
 MAPPING_PATH = SCRATCH_DIR / "sgi_codigos_anteriores.json"
 REPORT_PATH = SCRATCH_DIR / "sgi_sync_report.json"
 DRIVE_INDEX_PATH = SCRATCH_DIR / "sgi_drive_index.json"

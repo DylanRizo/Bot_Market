@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from marketplace_runtime import AccountLock
+from marketplace_runtime import AccountLock, alias_images_path
 
 
 def safety_store():
@@ -118,7 +118,7 @@ def expand_path(value: str | None, base_dir: Path) -> Path | None:
     path = Path(expanded)
     if not path.is_absolute():
         path = base_dir / path
-    return path
+    return alias_images_path(path)
 
 
 def bool_arg(args: list[str], enabled: bool, flag: str) -> None:
