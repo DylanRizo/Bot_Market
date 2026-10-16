@@ -28,13 +28,14 @@ panel responde `No autorizado`. No compartas ese archivo ni el enlace completo.
 ## 2. Que se puede compartir
 
 Usa el script `preparar_paquete_socios.ps1`. El paquete limpio contiene el bot,
-los iniciadores, esta guia y un archivo de cuentas de ejemplo.
+el panel (`static/`), los iniciadores, esta guia, el `MANUAL_OPERACION.md` y un
+`marketplace_accounts.json` con una cuenta de ejemplo.
 
 No incluye:
 
 - Contrasenas ni sesiones de Facebook.
-- Clave de OpenAI.
-- Tokens o credenciales de Google.
+- Clave de OpenAI ni llave del SGI.
+- Tokens o credenciales de Google ni `marketplace_integrations.json`.
 - `marketplace_bot.db` ni el historial de tu instalacion.
 - Productos manuales, fotos temporales, capturas, logs o archivos de diagnostico.
 
@@ -54,9 +55,14 @@ Para incluir `ArticulosGenerados.xlsx` y `imagenes_firupost`:
 powershell -ExecutionPolicy Bypass -File ".\preparar_paquete_socios.ps1" -IncludeCatalog
 ```
 
-El ZIP se crea de forma predeterminada en el Escritorio. Revisa su contenido
-antes de enviarlo por Drive, memoria USB o el medio privado que utilice el
-negocio.
+El ZIP se crea de forma predeterminada en el Escritorio
+(`-OutputPath` cambia el destino; el script falla si la carpeta o el ZIP ya
+existen). Revisa su contenido antes de enviarlo por Drive, memoria USB o el medio
+privado que utilice el negocio.
+
+Si agregas un modulo `.py` nuevo al bot, anadelo tambien a la lista `$files` de
+`preparar_paquete_socios.ps1`; un modulo olvidado hace que el panel no arranque en
+la copia del socio.
 
 ## 3. Requisitos de otra computadora
 
@@ -68,6 +74,9 @@ negocio.
 - Una copia legitima del inventario y las fotos que ese socio deba publicar.
 
 La IA es opcional. Sin clave de OpenAI el bot utiliza redaccion comercial local.
+La conexion con el SGI y Google Drive tambien es opcional (ver el README del
+repositorio): si el socio la usa, necesita su propia llave de solo lectura del
+SGI y su propia autorizacion de Drive.
 
 ## 4. Instalacion en otra computadora
 
@@ -86,7 +95,9 @@ python -m pip install -r ".\requirements_marketplace_bot.txt"
 powershell -ExecutionPolicy Bypass -File ".\iniciar_panel_marketplace.ps1"
 ```
 
-5. El navegador abrira el panel en `http://127.0.0.1:8794/` con la llave de la
+5. Para que el calendario avance con el panel cerrado, instala tambien el
+   trabajador (seccion 9).
+6. El navegador abrira el panel en `http://127.0.0.1:8794/` con la llave de la
    sesion incluida en el enlace. Si cierras la pestana, vuelve a ejecutar el
    iniciador en lugar de escribir la direccion a mano.
 
@@ -139,6 +150,13 @@ debe usar un puerto y una carpeta de Chrome diferentes.
 10. Activa el bot cuando todas las sesiones esten abiertas y el calendario este
     revisado.
 
+La `Proteccion de cuenta` (en `Automatizacion > Reglas`) viene activa en nivel
+`balanced`: maximo 3 anuncios al dia y 12 a la semana por cuenta, y calentamiento
+de 14 dias en cuentas nuevas (1 anuncio al dia al principio, 2 despues). No la
+subas hasta que la cuenta lleve semanas publicando sin avisos. Si Facebook muestra
+una restriccion, la cuenta se pausa 72 horas; revisala a mano antes de reanudarla.
+Los detalles estan en el `MANUAL_OPERACION.md`.
+
 Cambiar las fotos guardadas afecta al siguiente calendario generado. Los
 trabajos que ya estaban programados conservan sus fotos anteriores.
 
@@ -182,7 +200,9 @@ Antes de dejarlo trabajando:
 ## 12. Problemas frecuentes
 
 `El panel no abre`: confirma que Python este instalado y vuelve a ejecutar
-`iniciar_panel_marketplace.ps1`.
+`iniciar_panel_marketplace.ps1`. Si el error menciona un modulo que falta
+(por ejemplo `marketplace_safety`), el paquete se armo incompleto: regeneralo con
+la version actual de `preparar_paquete_socios.ps1`.
 
 `No autorizado`: abriste el panel sin la llave de la sesion. Cierra la pestana y
 vuelve a ejecutar `iniciar_panel_marketplace.ps1`, que genera el enlace correcto.
@@ -203,6 +223,10 @@ reales nuevas o utiliza otra cuenta.
 `No hay productos`: revisa que el Excel y `imagenes_firupost` esten en la
 carpeta del bot y que las rutas del inventario correspondan a sus fotos.
 
+`ACCOUNT_RESTRICTED`: Facebook mostro un aviso de limite o restriccion y el bot
+pauso la cuenta 72 horas. Entra a la cuenta, lee el aviso y no reanudes hasta
+resolverlo.
+
 `Facebook pide captcha, 2FA o revision`: el socio debe resolverlo manualmente.
 No sigas reintentando hasta que la cuenta vuelva a estar operativa.
 
@@ -215,6 +239,7 @@ Con el bot y el trabajador detenidos, respalda de forma privada:
 - `imagenes_firupost`.
 - `marketplace_custom_products`.
 - `marketplace_accounts.json`.
+- `marketplace_integrations.json`, si usa el SGI.
 
 Cada socio debe guardar su respaldo en un espacio privado. No debe entregar a
 otros socios `marketplace_bot.db`, `.firupost_openai_key.bin`, tokens, logs ni
