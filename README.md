@@ -5,8 +5,9 @@ productos, arma el calendario de la semana, rellena el formulario en el
 navegador y deja constancia de cada intento. Se administra desde un panel web
 local.
 
-Pensado para una tienda con catalogo en Google Sheets y WooCommerce, varias
-cuentas de Marketplace y la necesidad de publicar sin estar delante.
+Pensado para una tienda con varias cuentas de Marketplace y la necesidad de
+publicar sin estar delante. El inventario sale de un SGI; las fotos, de Google
+Drive y de una carpeta local de respaldo.
 
 ## Que hace
 
@@ -26,17 +27,12 @@ cuentas de Marketplace y la necesidad de publicar sin estar delante.
   generada por una API compatible con OpenAI.
 - **Trabajador permanente.** Corre como tarea de Windows: el calendario avanza
   aunque el panel este cerrado, y sobrevive a reinicios.
-
-- **Proteccion de cuenta.** Antes de cada anuncio real revisa limites por cuenta
-  (al dia, en 7 dias y separacion minima), aplica un calentamiento a las cuentas
-  que recien empiezan a vender (1 anuncio al dia la primera semana, 2 la
-  segunda), espera dias antes de repetir un producto en la misma cuenta, separa
-  las cuentas entre si y varia titulo y descripcion por cuenta. Si Facebook
-  muestra un aviso de limite o restriccion, pausa la cuenta 72 horas; tras
-  fallos seguidos la deja descansar 12. Tambien bloquea anuncios con enlaces o
-  correos y avisa de telefonos, mayusculas y titulos largos. Lo que frena la
-  proteccion se reprograma sin gastar intentos. Se configura en
-  `Automatizacion > Reglas > Proteccion de cuenta` (`marketplace_safety.py`).
+- **Proteccion de cuenta.** Antes de cada anuncio real aplica limites por
+  cuenta (al dia, en 7 dias y separacion minima), calienta las cuentas nuevas,
+  separa las cuentas entre si, varia la redaccion por cuenta, bloquea enlaces y
+  correos, y pausa la cuenta 72 horas si Facebook muestra una restriccion. Lo que
+  frena la proteccion se reprograma sin gastar intentos. Detalle en el
+  [manual](MANUAL_OPERACION.md#proteccion-de-cuenta).
 
 Nunca guarda la contrasena de Facebook: reutiliza un perfil de Chrome con la
 sesion ya iniciada. Captchas, 2FA y revisiones de cuenta detienen esa cuenta y
@@ -54,6 +50,15 @@ El bot se activa por escalones, del mas seguro al mas automatico:
 | `Calendario aprobado` | Publica unicamente lo aprobado |
 | `Autonomo` | Genera, aprueba y publica solo |
 
+Por defecto el bot arranca en `Supervisado` y con `Bot activo` apagado.
+
+## Requisitos
+
+Windows 10 u 11, Google Chrome, Python 3.10 a 3.12 y una cuenta de Facebook con
+acceso a Marketplace. El cifrado de claves usa DPAPI, por lo que el bot solo
+funciona en Windows (la suite de pruebas si corre en cualquier sistema con
+dependencias instaladas).
+
 ## Puesta en marcha
 
 ```powershell
@@ -62,15 +67,16 @@ copy marketplace_accounts.example.json marketplace_accounts.json
 ```
 
 Edita `marketplace_accounts.json` con tus cuentas y coloca junto al bot tu
-`ArticulosGenerados.xlsx` y la carpeta `imagenes_firupost`. Despues:
+`ArticulosGenerados.xlsx` y la carpeta `imagenes_productos`. Despues:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\abrir_sesion_marketplace_cuenta.ps1   # inicia sesion una vez
 powershell -ExecutionPolicy Bypass -File .\iniciar_panel_marketplace.ps1         # abre el panel
+powershell -ExecutionPolicy Bypass -File .\instalar_trabajador_marketplace.ps1   # trabajador permanente (opcional)
 ```
 
 El panel pide una llave que genera al arrancar; el script abre el enlace ya con
-ella incluida. Solo escucha en `127.0.0.1`.
+ella incluida (puerto 8794). Solo escucha en `127.0.0.1`.
 
 ## Conexion con el SGI y Google Drive (opcional)
 
@@ -104,23 +110,30 @@ alerta.
 ## Estructura
 
 ```
-marketplace_storage.py         base SQLite: cola, intentos, publicaciones, fotos usadas, alertas
-marketplace_scheduler.py       reglas del calendario y seleccion de productos
+marketplace_storage.py           base SQLite: cola, intentos, publicaciones, fotos usadas, alertas
+marketplace_scheduler.py         reglas del calendario y seleccion de productos
 marketplace_scheduler_worker.py  proceso permanente que ejecuta la cola
+marketplace_safety.py            proteccion de cuenta: limites, calentamiento, pausas, revision del texto
+marketplace_runtime.py           candados por cuenta y utilidades de ejecucion
 marketplace_campaign_runner.py   lanza cada publicacion con su candado de cuenta
 facebook_marketplace_browser_automator.py  rellena y publica el formulario con Selenium
 marketplace_listing_builder.py   titulos, descripciones, agrupacion de variantes
 marketplace_catalog.py           lee el inventario y arma las familias de producto
+marketplace_custom_products.py   productos manuales fuera del inventario
 marketplace_ai_descriptions.py   redaccion opcional por IA
 marketplace_bot_dashboard.py     servidor del panel
+static/                          frontend del panel (html, css, js)
 sgi_client.py                    lectura del catalogo del SGI con la llave de integracion
 drive_photos.py                  fotos de producto desde Google Drive (solo lectura)
 sgi_sync.py                      genera el Excel y las carpetas de fotos desde SGI + Drive
-static/                          frontend del panel (html, css, js)
-firupost_automator.py            sincroniza Google Sheets + WooCommerce al Excel
-legacy/                          generacion anterior, ya no se usa
+*.ps1                            iniciadores de Windows (panel, trabajador, sesiones, paquete)
 tests/                           suite de regresion
 ```
+
+Las columnas del Excel (`Titulo`, `Precio`, `Categoria`, ...) vienen del formato
+de FiruPost, pero el bot ya no usa ese programa. Si vienes de una instalacion
+anterior (carpeta `imagenes_firupost`), mira
+[Migrar una instalacion anterior](MANUAL_OPERACION.md#migrar-una-instalacion-anterior).
 
 ## Pruebas
 
@@ -129,16 +142,19 @@ python -m pip install -r requirements_dev.txt
 python -m pytest
 ```
 
-Corren sin red, sin navegador y contra una base temporal, nunca contra la real.
-Cubren la cola y los reintentos, el calendario y la rotacion, las reglas que
-evitan anuncios duplicados, la redaccion de anuncios y el panel.
+Corren sin red, sin navegador y contra una base temporal, nunca contra la real
+(unas 150 pruebas). Cubren la cola y los reintentos, el calendario y la rotacion,
+la proteccion de cuenta, las reglas que evitan anuncios duplicados, la redaccion
+de anuncios, el catalogo, el cliente del SGI, las fotos de Drive y el panel. Una
+accion de GitHub (`.github/workflows/tests.yml`) las corre en cada push y pull
+request. Conviene correrlas antes de tocar el publicador o el planificador.
 
 ## Documentacion
 
-- [`README_firupost_automation.md`](README_firupost_automation.md) — manual de operacion detallado
-- [`PLAN_BOT_MARKETPLACE_AUTONOMO.md`](PLAN_BOT_MARKETPLACE_AUTONOMO.md) — diseno por fases
-- [`GUIA_SOCIOS_MARKETPLACE_BOT.md`](GUIA_SOCIOS_MARKETPLACE_BOT.md) — guia para instalaciones de terceros
-- [`legacy/README.md`](legacy/README.md) — por que existe la carpeta `legacy`
+- [`MANUAL_OPERACION.md`](MANUAL_OPERACION.md) — uso diario: reglas, proteccion, fotos, alertas, comandos
+- [`GUIA_SOCIOS_MARKETPLACE_BOT.md`](GUIA_SOCIOS_MARKETPLACE_BOT.md) — instalacion en computadoras de terceros
+- [`PLAN_BOT_MARKETPLACE_AUTONOMO.md`](PLAN_BOT_MARKETPLACE_AUTONOMO.md) — diseno por fases y estado
+- [`marketplace_campaign_modes.md`](marketplace_campaign_modes.md) — campanas JSON manuales
 
 ## Aviso
 

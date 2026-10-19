@@ -132,6 +132,7 @@
               <input type="checkbox" data-auto-photo-account="${escapeHtml(account)}" data-auto-photo-family="${escapeHtml(product.key)}" value="${escapeHtml(image.id)}" ${selected.has(image.id) ? "checked" : ""}>
             </label>`).join("")}</div>
           </div>`).join("");
+          // El orden de subida (manual o automatico) lo muestra photoOrderStrip.
           return `<div class="photo-account"><strong>${escapeHtml(accounts[account]?.display_name || account)}</strong>
             ${choices || '<span class="muted">Sin fotos disponibles</span>'}
             <span class="photo-count">${selected.size} fotos seleccionadas</span>
@@ -139,7 +140,7 @@
           </div>`;
         }).join("")}</div>
       </article>`).join("");
-      document.querySelectorAll("[data-auto-photo-account]").forEach(input => {
+      document.querySelectorAll("input[data-auto-photo-account]").forEach(input => {
         input.onchange = () => {
           const account = input.dataset.autoPhotoAccount;
           const family = input.dataset.autoPhotoFamily;

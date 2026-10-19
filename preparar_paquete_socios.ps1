@@ -26,6 +26,7 @@ $files = @(
     "marketplace_custom_products.py",
     "marketplace_listing_builder.py",
     "marketplace_runtime.py",
+    "marketplace_safety.py",
     "marketplace_scheduler.py",
     "marketplace_scheduler_worker.py",
     "marketplace_storage.py",
@@ -39,7 +40,7 @@ $files = @(
     "instalar_trabajador_marketplace.ps1",
     "requirements_marketplace_bot.txt",
     "GUIA_SOCIOS_MARKETPLACE_BOT.md",
-    "README_firupost_automation.md"
+    "MANUAL_OPERACION.md"
 )
 
 foreach ($name in $files) {

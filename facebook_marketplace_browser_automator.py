@@ -26,7 +26,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 SCRATCH_DIR = Path(__file__).resolve().parent
 DEFAULT_EXCEL = SCRATCH_DIR / "ArticulosGenerados.xlsx"
 DEFAULT_IMAGES = images_root(SCRATCH_DIR)
-DEFAULT_PROFILE = Path.home() / "AppData" / "Local" / "BotInvisibleChrome"
+DEFAULT_PROFILE = Path.home() / "AppData" / "Local" / "MarketplaceBot_cuenta1"
 CREATE_URL = "https://www.facebook.com/marketplace/create/item"
 FAILURES_DIR = Path(__file__).resolve().parent / "marketplace_failures"
 
@@ -293,8 +293,8 @@ def chrome_driver(args: argparse.Namespace) -> webdriver.Chrome:
     except WebDriverException as exc:
         raise RuntimeError(
             "No pude abrir Chrome con Selenium. Si ya tienes Chrome abierto con "
-            "BotInvisibleChrome, cierralo o abre la sesion con "
-            "abrir_sesion_facebook_firupost.ps1 actualizado."
+            "el perfil de la cuenta, cierralo o abre la sesion con "
+            "abrir_sesion_marketplace_cuenta.ps1."
         ) from exc
 
 
@@ -659,8 +659,8 @@ def ensure_marketplace_session(driver: webdriver.Chrome) -> None:
     login_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='email'], input[type='password']")
     if login_inputs or "Email or phone" in body_text or "Log In" in body_text:
         raise RuntimeError(
-            "La sesion de Facebook no esta iniciada en el perfil BotInvisibleChrome. "
-            "Ejecuta abrir_sesion_facebook_firupost.ps1, inicia sesion manualmente "
+            "La sesion de Facebook no esta iniciada en el perfil de la cuenta. "
+            "Ejecuta abrir_sesion_marketplace_cuenta.ps1, inicia sesion manualmente "
             "y vuelve a correr esta prueba."
         )
     if "/marketplace/create/item" not in current_url:

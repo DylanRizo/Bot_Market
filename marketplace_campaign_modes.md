@@ -1,6 +1,21 @@
 # Modos de publicacion Marketplace
 
-En cada job de `marketplace_campaign_example.json` puedes elegir como publicar los productos con `listing_mode`.
+> Esto describe las **campanas JSON manuales** que ejecuta
+> `marketplace_campaign_runner.py`. El uso normal es el panel y el calendario
+> automatico (ver [`MANUAL_OPERACION.md`](MANUAL_OPERACION.md)), que eligen el
+> modo por familia de producto. El archivo de campana no viene en el repositorio:
+> creas el tuyo (`marketplace_campaign_example.json` es el nombre por defecto y
+> esta ignorado por git) o lo indicas con `--campaign`.
+
+Una campana es un objeto con `default_account` (clave de `marketplace_accounts.json`)
+y una lista `jobs`. En cada job eliges como publicar los productos con `listing_mode`:
+
+```json
+{
+  "default_account": "cuenta1",
+  "jobs": [ { "name": "...", "listing_mode": "individual", "source_excel": "ArticulosGenerados.xlsx", "images_root": "imagenes_productos" } ]
+}
+```
 
 ## 1. Individual
 
@@ -11,7 +26,7 @@ Publica cada talla/color como un anuncio separado.
   "name": "Camisas sin mangas individuales",
   "listing_mode": "individual",
   "source_excel": "ArticulosGenerados.xlsx",
-  "images_root": "imagenes_firupost",
+  "images_root": "imagenes_productos",
   "title_contains": ["sin mangas"],
   "item_interval_minutes": 60
 }
@@ -26,7 +41,7 @@ Publica todos los productos seleccionados en un solo anuncio, con varias fotos y
   "name": "Camisas manga corta agrupadas",
   "listing_mode": "grouped",
   "source_excel": "ArticulosGenerados.xlsx",
-  "images_root": "imagenes_firupost",
+  "images_root": "imagenes_productos",
   "sku_prefixes": ["TS"]
 }
 ```
@@ -41,7 +56,7 @@ Hace un anuncio por cada color. Ejemplo: una publicacion para negro con tallas S
   "listing_mode": "grouped",
   "group_by": "color",
   "source_excel": "ArticulosGenerados.xlsx",
-  "images_root": "imagenes_firupost",
+  "images_root": "imagenes_productos",
   "title_contains": ["sin mangas"],
   "item_interval_minutes": 60
 }
@@ -57,7 +72,7 @@ Hace un anuncio por cada talla. Ejemplo: una publicacion talla M con colores neg
   "listing_mode": "grouped",
   "group_by": "size",
   "source_excel": "ArticulosGenerados.xlsx",
-  "images_root": "imagenes_firupost",
+  "images_root": "imagenes_productos",
   "sku_prefixes": ["TS"],
   "item_interval_minutes": 60
 }
@@ -73,14 +88,24 @@ Puedes seleccionar productos con cualquiera de estas opciones:
 - `title_contains`: texto dentro del titulo, por ejemplo `["sin mangas"]`.
 - `exclude_title_contains`: texto a excluir, por ejemplo `["sin mangas"]`.
 
-Antes de publicar, revisa el plan:
+Antes de publicar, revisa el plan (no abre Facebook):
 
 ```powershell
-python "C:\ruta\al\bot\marketplace_campaign_runner.py" --plan-only
+python marketplace_campaign_runner.py --plan-only
+```
+
+Para llenar el formulario y avanzar con `Next` sin publicar:
+
+```powershell
+python marketplace_campaign_runner.py --advance-only
 ```
 
 Para publicar de verdad respetando los intervalos:
 
 ```powershell
-python "C:\ruta\al\bot\marketplace_campaign_runner.py" --confirm-publish
+python marketplace_campaign_runner.py --confirm-publish
 ```
+
+Otras opciones: `--campaign RUTA`, `--accounts RUTA`, `--from-job N`,
+`--max-jobs N` y `--fast` (ignora las esperas; solo para pruebas). El runner
+tambien respeta la proteccion de cuenta y el candado de cada cuenta.
