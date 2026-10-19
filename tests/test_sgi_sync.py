@@ -43,6 +43,15 @@ def test_el_titulo_respeta_el_formato_que_agrupa_el_constructor(code, title, col
     assert (parsed["color"], parsed["size"]) == (color, size)
 
 
+def test_las_calcetas_multicolor_no_son_de_compresion_ni_van_con_ellas():
+    assert listing_title(item("CAL-MUL-U")) == "Calcetas - Multicolor"
+    multicolor = {"sku": "CAL-MUL-U", "title": ""}
+    compresion = {"sku": "CAL-15NEG-M", "title": ""}
+    assert preset_matches_row(ASSISTANT_PRESETS["calcetas_multicolor"], multicolor)
+    assert not preset_matches_row(ASSISTANT_PRESETS["calcetas"], multicolor)
+    assert preset_matches_row(ASSISTANT_PRESETS["calcetas"], compresion)
+
+
 def test_un_codigo_desconocido_usa_el_nombre_del_sgi():
     assert listing_title(item("XYZ-1", name="HUB USB DE 8 PUERTOS")) == "Hub usb de 8 puertos"
 
@@ -58,7 +67,7 @@ def test_los_presets_reconocen_el_sku_nuevo_sin_mezclar_familias():
 
 @pytest.fixture()
 def workspace(tmp_path: Path):
-    images = tmp_path / "imagenes_firupost"
+    images = tmp_path / "imagenes_productos"
     (images / "TSBL-S").mkdir(parents=True)
     (images / "TSBL-S" / "foto_1.jpg").write_bytes(b"foto local")
     cache = tmp_path / "cache"
@@ -126,6 +135,28 @@ def test_genera_el_excel_y_las_carpetas_que_ya_consume_el_publicador(workspace):
     assert not (images / ".sgi-sync-tmp").exists()
     assert not list(base.glob("*.tmp*"))
     assert json.loads((base / "sgi_sync_report.json").read_text(encoding="utf-8"))["catalog_items"] == 5
+
+
+def test_las_fotos_locales_por_codigo_nuevo_tienen_prioridad_y_no_se_borran(workspace):
+    images, cache, base = workspace
+    locales = images / "_fotos_locales"
+    (locales / "CMP-AZU").mkdir(parents=True)
+    (locales / "CMP-AZU" / "CMP-AZU - Camisa azul - 001.jpg").write_bytes(b"consolidada")
+    # Va por el numero, no por la descripcion ("Camisa a..." quedaria primero).
+    (locales / "CMP-AZU" / "CMP-AZU - Camisa a la medida - 002.jpg").write_bytes(b"segunda")
+    # Un producto sin codigo anterior tambien puede usar sus fotos locales.
+    (locales / "CAL-MUL").mkdir()
+    (locales / "CAL-MUL" / "CAL-MUL - Calcetas - 001.jpg").write_bytes(b"calcetas")
+    report = run_sync(
+        [item("CMP-AZU-S"), item("CAL-MUL-U")], {}, lambda photo: None, {"CMP-AZU-S": "TSBL-S"},
+        images_root=images, inventory_path=base / "a.xlsx", report_path=base / "r.json",
+    )
+    assert report["local_photos"] == ["CAL-MUL-U", "CMP-AZU-S"]
+    assert (images / "CMP-AZU" / "foto_1.jpg").read_bytes() == b"consolidada"
+    assert (images / "CMP-AZU" / "foto_2.jpg").read_bytes() == b"segunda"
+    assert (images / "CAL-MUL" / "foto_1.jpg").read_bytes() == b"calcetas"
+    # Las fotos propias quedan como estaban: la sincronizacion solo copia.
+    assert (locales / "CMP-AZU" / "CMP-AZU - Camisa azul - 001.jpg").is_file()
 
 
 def test_reemplaza_las_fotos_de_una_sincronizacion_anterior(workspace):
@@ -207,3 +238,76 @@ def test_revalidacion_antes_de_publicar():
     assert (ok, code) == (False, "PRICE_ISSUE") and "CMP-BLA-M" in detail
     assert revalidate_family(catalog, ["DUR-"])[:2] == (False, "OUT_OF_STOCK")
     assert revalidate_family(catalog, ["BOL-"])[:2] == (False, "OUT_OF_STOCK")
+
+
+# --- sin autorizacion de Drive -------------------------------------------------
+
+def test_sin_drive_usa_las_fotos_ya_descargadas_y_las_carpetas_actuales(workspace):
+    from drive_photos import offline_download
+
+    images, cache, base = workspace
+    groups, _ = fake_drive(cache)
+    (cache / "a.jpg").write_bytes(b"ya descargada")
+    (images / "BOL-NEG").mkdir()
+    (images / "BOL-NEG" / "foto_1.jpg").write_bytes(b"foto preparada antes")
+    report = run_sync(
+        [item("CMP-NEG-M"), item("BOL-NEG-U"), item("SHT-GRI-L")],
+        groups,
+        offline_download(cache),
+        {},
+        images_root=images,
+        inventory_path=base / "ArticulosGenerados.xlsx",
+        report_path=base / "sgi_sync_report.json",
+        drive_offline="Falta autorizar Drive",
+    )
+    assert report["drive_offline"] == "Falta autorizar Drive"
+    assert report["publishable"] == ["BOL-NEG-U", "CMP-NEG-M"]
+    assert [entry["code"] for entry in report["without_photos"]] == ["SHT-GRI-L"]
+    assert (images / "CMP-NEG" / "foto_1.jpg").read_bytes() == b"ya descargada"
+    assert not (images / "CMP-NEG" / "foto_2.jpg").exists(), "la foto que nunca se bajo no aparece"
+    assert (images / "BOL-NEG" / "foto_1.jpg").read_bytes() == b"foto preparada antes"
+
+
+def test_la_sincronizacion_sigue_si_drive_pierde_el_permiso(monkeypatch, workspace):
+    import drive_photos
+    import sgi_client
+    import sgi_sync
+
+    images, cache, base = workspace
+    monkeypatch.setattr(sgi_client, "load_settings", lambda: {"sgi": {"base_url": "https://sgi.test"}, "drive": {}})
+
+    class Cliente:
+        @classmethod
+        def from_local_configuration(cls):
+            return cls()
+
+        def catalog(self):
+            return [item("BOL-NEG-U")]
+
+    def sin_permiso(**kwargs):
+        raise drive_photos.DriveNotAuthorized("Falta autorizar Drive")
+
+    monkeypatch.setattr(sgi_client, "SgiClient", Cliente)
+    monkeypatch.setattr(drive_photos.DriveLibrary, "connect", staticmethod(sin_permiso))
+    monkeypatch.setattr(sgi_sync, "load_cached_drive_index", lambda: [])
+    monkeypatch.setattr(sgi_sync, "IMAGES_ROOT", images)
+    monkeypatch.setattr(sgi_sync, "INVENTORY_PATH", base / "ArticulosGenerados.xlsx")
+    monkeypatch.setattr(sgi_sync, "REPORT_PATH", base / "sgi_sync_report.json")
+    monkeypatch.setattr(sgi_sync, "load_mapping", lambda: {})
+    (images / "BOL-NEG").mkdir()
+    (images / "BOL-NEG" / "foto_1.jpg").write_bytes(b"foto preparada antes")
+
+    original = sgi_sync.run_sync
+
+    def run_sync_local(*args, **kwargs):
+        kwargs.update(images_root=images, inventory_path=base / "ArticulosGenerados.xlsx",
+                      report_path=base / "sgi_sync_report.json")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sgi_sync, "run_sync", run_sync_local)
+    report = sgi_sync.sync_from_local_configuration()
+    assert report["drive_offline"]
+    assert report["publishable"] == ["BOL-NEG-U"]
+
+    with pytest.raises(drive_photos.DriveNotAuthorized):
+        sgi_sync.sync_from_local_configuration(authorize_drive=True)

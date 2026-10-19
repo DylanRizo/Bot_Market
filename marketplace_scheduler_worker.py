@@ -12,8 +12,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from marketplace_runtime import alias_images_path
 from marketplace_safety import backfill_events, check_can_publish
-from marketplace_scheduler import generate_week, load_config
+from marketplace_safety import load_safety
+from marketplace_scheduler import apply_photo_order, generate_week, load_config, schedule_window
 from marketplace_storage import DEFAULT_DB, MarketplaceStore, now_iso
 
 
@@ -102,7 +104,7 @@ def resolve_path(value: str | None) -> Path | None:
     if not value:
         return None
     path = Path(value)
-    return path if path.is_absolute() else SCRATCH_DIR / path
+    return alias_images_path(path if path.is_absolute() else SCRATCH_DIR / path)
 
 
 def preflight(item: dict[str, Any], config: dict[str, Any]) -> tuple[bool, str, str]:
@@ -186,6 +188,69 @@ def pending_intent_ids() -> set[str]:
     return {path.stem for path in PUBLISH_INTENTS_DIR.glob("*.json")}
 
 
+def prepare_reuse(store: MarketplaceStore, item: dict[str, Any], attempt_id: int, images: list[Path]) -> bool:
+    """Antes de volver a subir un producto: sigue permitido y se borra el anuncio agotado anterior."""
+    from marketplace_scheduler import reuse_check
+
+    queue_id = item["id"]
+    ok, reuse = reuse_check(store, item["account"], str(item.get("family_key") or ""), images, load_safety(store))
+    if not ok:
+        detail = "Ya no se puede repetir: la cuenta tiene otra vez un anuncio activo de este producto o no paso el plazo."
+        store.finish_attempt(attempt_id, "skipped", "IMAGE_REUSED", detail)
+        store.update_queue_item(queue_id, status="skipped", detail=detail, finished_at=now_iso())
+        log(f"Repeticion cancelada: {item['name']} | cuenta={item['account']}")
+        return False
+    old = (reuse or {}).get("replace_listing")
+    if not old:
+        return True
+    import marketplace_listings
+    from marketplace_listing_worker import LISTINGS_SCRIPT, _error, _run
+    from marketplace_runtime import AccountLock
+
+    account = load_json(ACCOUNTS_PATH, {"accounts": {}}).get("accounts", {}).get(item["account"]) or {}
+    chrome_ok, chrome_detail = ensure_chrome(item["account"], account)
+    if not chrome_ok:
+        store.postpone(queue_id, datetime.fromtimestamp(time.time() + 30 * 60).isoformat(timespec="seconds"),
+                       f"En espera: {chrome_detail}")
+        return False
+    try:
+        with AccountLock(item["account"], timeout_seconds=30):
+            code, output = _run([
+                sys.executable, str(LISTINGS_SCRIPT), "act", "--debugger-address", str(account.get("debugger_address") or ""),
+                "--title", old["title"], "--listed-on", old["listed_on"], "--action", "delete",
+            ])
+    except RuntimeError as exc:
+        store.postpone(queue_id, datetime.fromtimestamp(time.time() + 30 * 60).isoformat(timespec="seconds"), f"En espera: {exc}")
+        return False
+    if code == 0 and "[listings-done]" in output:
+        action_id = marketplace_listings.queue_action(store, old["key"], "delete", origin="reuse")
+        marketplace_listings.finish_action(store, action_id, "done", "Borrado para volver a publicarlo (aprobado en el calendario).")
+        log(f"Anuncio anterior borrado para volver a subir {item['name']} | cuenta={item['account']}")
+        return True
+    error_code, detail = _error(output)
+    message = f"No se pudo borrar el anuncio anterior ({old['title']}, {old['listed_on']}): {detail}"
+    store.finish_attempt(attempt_id, "blocked", error_code, message, output)
+    store.update_queue_item(queue_id, status="blocked", detail=message, finished_at=now_iso())
+    store.create_alert("warning", "REUSE_DELETE_FAILED", message, item["account"], queue_id)
+    return False
+
+
+def with_photo_order(store: MarketplaceStore, item: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """Copia del trabajo con las fotos en el orden que toca (manual o portada rotada)."""
+    job = dict(item.get("job") or {})
+    overrides = dict(job.get("listing_overrides") or {})
+    paths = overrides.get("image_paths") or job.get("image_paths") or []
+    if not paths:
+        return item
+    ordered, mode = apply_photo_order(
+        store, config, load_safety(store), item["account"], str(item.get("family_key") or ""), list(paths)
+    )
+    overrides["image_paths"] = ordered
+    job["listing_overrides"] = overrides
+    log(f"Fotos ({mode}) para {item['name']} | cuenta={item['account']} | portada={Path(ordered[0]).parent.name}/{Path(ordered[0]).name}")
+    return {**item, "job": job}
+
+
 def campaign_for_item(item: dict[str, Any], config: dict[str, Any]) -> Path:
     base = load_json(CAMPAIGN_PATH, {"defaults": {}})
     defaults = dict(base.get("defaults") or {})
@@ -193,8 +258,9 @@ def campaign_for_item(item: dict[str, Any], config: dict[str, Any]) -> Path:
     job = dict(item["job"])
     for key in ("source_excel", "excel", "images_root", "output_dir"):
         value = job.get(key)
-        if value and not Path(str(value)).is_absolute():
-            job[key] = str((SCRATCH_DIR / str(value)).resolve())
+        if value:
+            resolved = resolve_path(str(value))
+            job[key] = str(resolved if Path(str(value)).is_absolute() else resolved.resolve())
     job["intent_file"] = str(intent_path_for(item["id"]))
     payload = {
         "default_account": item["account"],
@@ -248,6 +314,7 @@ def refresh_from_sgi(store: MarketplaceStore) -> dict[str, Any]:
         SGI_STATE_KEY,
         {
             "attempted_at_epoch": attempted,
+            "drive_offline": bool(report.get("drive_offline")),
             "generated_at": report["generated_at"],
             "price_issues": len(report["price_issues"]),
             "publishable": len(report["publishable"]),
@@ -255,6 +322,25 @@ def refresh_from_sgi(store: MarketplaceStore) -> dict[str, Any]:
             "without_photos": len(report["without_photos"]),
         },
     )
+    if report.get("drive_offline"):
+        store.create_alert(
+            "warning",
+            "DRIVE_NOT_AUTHORIZED",
+            "Google Drive no esta autorizado. El bot sigue publicando con las fotos ya descargadas; "
+            "autoriza Drive en el panel para traer fotos nuevas.",
+        )
+    else:
+        # Drive volvio a responder: el aviso anterior ya no aplica.
+        with store.connect() as connection:
+            connection.execute(
+                "UPDATE alerts SET status='resolved', updated_at=? WHERE status='open' AND code='DRIVE_NOT_AUTHORIZED'",
+                (now_iso(),),
+            )
+    with store.connect() as connection:
+        connection.execute(
+            "UPDATE alerts SET status='resolved', updated_at=? WHERE status='open' AND code LIKE 'SGI%'",
+            (now_iso(),),
+        )
     return report
 
 
@@ -301,6 +387,15 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
         return
 
     if publishing:
+        inside, next_start = schedule_window(config)
+        if not inside:
+            store.postpone(
+                queue_id,
+                next_start.isoformat(timespec="seconds"),
+                "Atrasado: se publica al empezar el proximo horario del bot.",
+            )
+            log(f"Fuera de horario: {item['name']} | cuenta={item['account']} queda para {next_start:%Y-%m-%d %H:%M}")
+            return
         allowed, hold_code, hold_detail, retry_at = check_can_publish(store, item["account"])
         if not allowed:
             store.postpone(queue_id, retry_at, f"Esperando por proteccion de cuenta: {hold_detail}")
@@ -317,15 +412,20 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
 
     images = store.job_image_paths(item.get("job") or {})
     conflicts = store.media_conflicts(item["account"], images)
+    if publishing and conflicts and (item.get("job") or {}).get("reuse") and item.get("approved"):
+        # Repeticion aprobada: se vuelve a comprobar y se borra el anuncio viejo.
+        handled = prepare_reuse(store, item, attempt_id, images)
+        if not handled:
+            return
+        conflicts = []
     if publishing and conflicts:
         detail = (
             f"La cuenta {item['account']} ya publico {len(conflicts)} de estas fotos. "
             "Agrega fotos nuevas para volver a publicar este producto en la misma cuenta."
         )
-        store.finish_attempt(attempt_id, "blocked", "IMAGE_REUSED", detail)
-        store.update_queue_item(queue_id, status="blocked", detail=detail, finished_at=now_iso())
-        store.create_alert("warning", "IMAGE_REUSED", detail, item["account"], queue_id)
-        log(f"Foto repetida bloqueada: {item['name']} | cuenta={item['account']}")
+        store.finish_attempt(attempt_id, "skipped", "IMAGE_REUSED", detail)
+        store.update_queue_item(queue_id, status="skipped", detail=detail, finished_at=now_iso())
+        log(f"Omitido por fotos ya usadas: {item['name']} | cuenta={item['account']}")
         return
 
     ok, gate_code, gate_detail = sgi_gate(store, item)
@@ -357,6 +457,7 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
         log(f"Bloqueado {item['name']}: {detail}")
         return
 
+    item = with_photo_order(store, item, config)
     campaign_path = campaign_for_item(item, config)
     command = [
         sys.executable,
@@ -445,12 +546,37 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
     log(f"Fallo {item['name']}: {error_code} - {detail}")
 
 
+CALENDAR_STATE_KEY = "calendar_generation"
+EMPTY_CALENDAR_RETRY_SECONDS = 60 * 60
+
+
 def ensure_future_calendar(store: MarketplaceStore, config: dict[str, Any]) -> None:
     pending = store.list_queue(statuses=["planned", "queued", "running", "retry"], limit=2000)
     future = [item for item in pending if item["scheduled_at"] >= now_iso()]
-    if not future:
-        result = generate_week(store, config)
-        log(f"Calendario generado automaticamente: {result['created']} publicaciones.")
+    if future:
+        return
+    # Si la ultima vez no salio nada que programar, se espera una hora: antes lo
+    # intentaba cada 30 segundos (4.078 veces entre el 9 y el 17 de octubre).
+    state = store.worker_state(CALENDAR_STATE_KEY)
+    if state.get("created") == 0 and time.time() - float(state.get("attempted_at_epoch") or 0) < EMPTY_CALENDAR_RETRY_SECONDS:
+        return
+    result = generate_week(store, config)
+    store.heartbeat(CALENDAR_STATE_KEY, {"attempted_at_epoch": time.time(), "created": result["created"]})
+    log(f"Calendario generado automaticamente: {result['created']} publicaciones.")
+    with store.connect() as connection:
+        if result["created"]:
+            connection.execute(
+                "UPDATE alerts SET status='resolved', updated_at=? WHERE status='open' AND code='CALENDAR_EMPTY'",
+                (now_iso(),),
+            )
+    if not result["created"]:
+        store.create_alert(
+            "warning",
+            "CALENDAR_EMPTY",
+            "No hay nada que programar: cada cuenta ya uso las fotos de todos los productos en rotacion. "
+            "Los productos se pueden repetir cuando pasen los dias de espera y la cuenta no tenga un anuncio "
+            "activo de ellos; mientras tanto, sube fotos nuevas o agrega productos a la rotacion.",
+        )
 
 
 def run_once(store: MarketplaceStore) -> bool:
@@ -485,11 +611,62 @@ def run_once(store: MarketplaceStore) -> bool:
     ensure_future_calendar(store, config)
     item = store.claim_due()
     if not item:
-        return False
+        # Sin publicaciones pendientes: turno de revisar los anuncios ya publicados.
+        from marketplace_listing_worker import run_listing_work
+
+        try:
+            return run_listing_work(store, config, ensure_chrome, log)
+        except Exception as exc:  # noqa: BLE001 - revisar anuncios no debe frenar las publicaciones.
+            log(f"Error al revisar anuncios: {exc}")
+            return False
     store.heartbeat("scheduler", {"status": "running", "queue_id": item["id"], "name": item["name"]})
     run_item(store, item, config)
     store.heartbeat("scheduler", {"status": "idle", "last_queue_id": item["id"]})
     return True
+
+
+WORKER_PID_PATH = SCRATCH_DIR / "marketplace_scheduler_worker.pid"
+
+
+_INSTANCE_LOCK = None
+
+
+def acquire_single_instance() -> bool:
+    """Impide dos trabajadores a la vez (la tarea de Windows y el panel pueden lanzar uno cada uno)."""
+    global _INSTANCE_LOCK
+    import atexit
+
+    from marketplace_runtime import AccountLock
+
+    lock = AccountLock("scheduler_worker", timeout_seconds=0)
+    try:
+        lock.acquire()
+    except RuntimeError:
+        return False
+    _INSTANCE_LOCK = lock
+    atexit.register(lock.release)
+    return True
+
+
+def register_pid(path: Path = WORKER_PID_PATH) -> None:
+    """Deja su numero de proceso para el panel.
+
+    La tarea de Windows arranca el trabajador sin pasar por el panel; sin este
+    archivo el panel lo mostraba detenido y podia lanzar una segunda copia.
+    """
+    import atexit
+
+    pid = os.getpid()
+    path.write_text(str(pid), encoding="utf-8")
+
+    def cleanup() -> None:
+        try:
+            if path.read_text(encoding="utf-8").strip() == str(pid):
+                path.unlink()
+        except OSError:
+            pass
+
+    atexit.register(cleanup)
 
 
 def main() -> None:
@@ -499,7 +676,11 @@ def main() -> None:
     parser.add_argument("--poll-seconds", type=int, default=30)
     args = parser.parse_args()
     store = MarketplaceStore(args.db)
+    if not acquire_single_instance():
+        log("Ya hay otro trabajador corriendo; este se cierra para no duplicar el calendario.")
+        return
     log(f"Trabajador iniciado. Base={store.path}")
+    register_pid()
     try:
         backfill_events(store, ACTIVITY_PATH)
     except Exception as exc:  # noqa: BLE001 - sin historial los limites arrancan en cero.

@@ -26,6 +26,17 @@ def sin_sgi_real(monkeypatch):
     monkeypatch.setattr(worker, "sgi_configured", lambda: False)
 
 
+@pytest.fixture(autouse=True)
+def dentro_del_horario(monkeypatch):
+    """Las pruebas del trabajador no dependen de la hora real: simulan estar
+    dentro del horario del bot. Las que prueban el horario lo reemplazan."""
+    from datetime import datetime
+
+    import marketplace_scheduler_worker as worker
+
+    monkeypatch.setattr(worker, "schedule_window", lambda config, now=None: (True, now or datetime.now()))
+
+
 @pytest.fixture()
 def store(tmp_path: Path) -> MarketplaceStore:
     return MarketplaceStore(tmp_path / "prueba.db")

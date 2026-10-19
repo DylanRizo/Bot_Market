@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
+from marketplace_runtime import images_root
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver import ChromeOptions
@@ -23,8 +24,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
-DEFAULT_EXCEL = SCRATCH_DIR / "firupost_test_batch" / "ArticulosGenerados_TEST.xlsx"
-DEFAULT_IMAGES = SCRATCH_DIR / "firupost_test_batch" / "imagenes"
+DEFAULT_EXCEL = SCRATCH_DIR / "ArticulosGenerados.xlsx"
+DEFAULT_IMAGES = images_root(SCRATCH_DIR)
 DEFAULT_PROFILE = Path.home() / "AppData" / "Local" / "BotInvisibleChrome"
 CREATE_URL = "https://www.facebook.com/marketplace/create/item"
 FAILURES_DIR = Path(__file__).resolve().parent / "marketplace_failures"
@@ -1268,7 +1269,10 @@ def main() -> None:
         print(f"[marketplace-browser] [listing-url:{driver.current_url}]", flush=True)
         print("[marketplace-browser] [publish-confirmed]", flush=True)
         log("Publicacion confirmada por Facebook Marketplace.")
-        report_outcome(args.account, True, name=product["title"])
+        report_outcome(
+            args.account, True, name=product["title"], cover=product["image"],
+            description=product["description"], tags=product.get("tags") or [],
+        )
     except Exception as exc:
         screenshot = capture_failure(driver, stage, exc)
         code = error_code(exc)
@@ -1283,7 +1287,16 @@ def main() -> None:
         raise
 
 
-def report_outcome(account: str, success: bool, code: str = "", detail: str = "", name: str = "") -> None:
+def report_outcome(
+    account: str,
+    success: bool,
+    code: str = "",
+    detail: str = "",
+    name: str = "",
+    cover: str = "",
+    description: str = "",
+    tags: Iterable[str] = (),
+) -> None:
     if not account:
         return
     try:
@@ -1292,7 +1305,7 @@ def report_outcome(account: str, success: bool, code: str = "", detail: str = ""
 
         store = MarketplaceStore(default_db_path())
         if success:
-            record_publication(store, account, name, "publicador")
+            record_publication(store, account, name, "publicador", cover=cover, description=description, tags=tags)
         else:
             register_outcome(store, account, False, code, detail[:300])
     except Exception as exc:  # noqa: BLE001 - el anuncio ya se publico; no se debe marcar como fallido.

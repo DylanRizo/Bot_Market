@@ -59,6 +59,8 @@ def normalize_config(raw: dict[str, Any] | None = None) -> dict[str, Any]:
     config = dict(DEFAULT_AUTONOMY_CONFIG)
     config.update(raw or {})
     config["enabled"] = bool(config.get("enabled", False))
+    # La IA solo se usa si la persona la enciende en Automatizacion.
+    config["ai_descriptions"] = config.get("ai_descriptions") is True
     if config.get("mode") not in {"simulation", "dry_run", "supervised", "semiautomatic", "autonomous"}:
         config["mode"] = "supervised"
     config["active_days"] = sorted({int(day) for day in config.get("active_days", []) if 0 <= int(day) <= 6})
@@ -90,6 +92,15 @@ def normalize_config(raw: dict[str, Any] | None = None) -> dict[str, Any]:
             if isinstance(paths, list) and paths
         }
     config["account_media"] = account_media
+    # Productos en los que la persona fijo el orden de las fotos (la primera es
+    # la portada). En los demas el bot rota la portada en cada publicacion.
+    manual_order: dict[str, dict[str, bool]] = {}
+    for account, families in dict(config.get("photo_order_manual") or {}).items():
+        if isinstance(families, dict):
+            chosen = {str(family): True for family, enabled in families.items() if enabled}
+            if chosen:
+                manual_order[str(account)] = chosen
+    config["photo_order_manual"] = manual_order
     start = parse_clock(config.get("start_time", "09:00"), "09:00")
     end = parse_clock(config.get("end_time", "18:00"), "18:00")
     if end <= start:
@@ -117,6 +128,24 @@ def save_config(store: MarketplaceStore, raw: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"No existen las cuentas: {', '.join(missing)}.")
     store.set_setting("autonomy", config)
     return config
+
+
+def schedule_window(config: dict[str, Any], now: datetime | None = None) -> tuple[bool, datetime]:
+    """(estamos dentro del horario del bot, cuando empieza el proximo horario)."""
+    current = now or datetime.now()
+    start_clock = parse_clock(config.get("start_time", "09:00"), "09:00")
+    end_clock = parse_clock(config.get("end_time", "18:00"), "18:00")
+    days = set(config.get("active_days") or [])
+    if current.weekday() in days and start_clock <= current.time() <= end_clock:
+        return True, current
+    for offset in range(0, 8):
+        day = current.date() + timedelta(days=offset)
+        if day.weekday() not in days:
+            continue
+        start = datetime.combine(day, start_clock)
+        if start > current:
+            return False, start
+    return False, current + timedelta(days=1)
 
 
 def jitter_span_minutes(config: dict[str, Any]) -> int:
@@ -177,7 +206,21 @@ def _eligible_candidate(
     return scheduled_at - last_used[family] >= timedelta(days=cooldown_days)
 
 
-def job_for_account(job: dict[str, Any], account: str, config: dict[str, Any]) -> dict[str, Any]:
+def rotate_cover(paths: list[str], offset: int) -> list[str]:
+    """Empieza la lista de fotos en otra posicion para que cada cuenta tenga otra portada.
+
+    Las fotos de una familia vienen alternando colores (blanca, gris, negra...),
+    asi que correr una posicion cambia tambien el color de la portada.
+    """
+    if not paths or offset % len(paths) == 0:
+        return list(paths)
+    shift = offset % len(paths)
+    return list(paths[shift:]) + list(paths[:shift])
+
+
+def job_for_account(
+    job: dict[str, Any], account: str, config: dict[str, Any], cover_offset: int = 0
+) -> dict[str, Any]:
     account_job = dict(job)
     account_job["account"] = account
     family = str(job.get("family_key") or "")
@@ -193,10 +236,126 @@ def job_for_account(job: dict[str, Any], account: str, config: dict[str, Any]) -
         overrides = dict(job.get("listing_overrides") or {})
         overrides["image_paths"] = list(assigned[:10])
         account_job["listing_overrides"] = overrides
+    if cover_offset:
+        overrides = dict(account_job.get("listing_overrides") or {})
+        base = overrides.get("image_paths") or account_job.get("image_paths") or []
+        if base:
+            overrides["image_paths"] = rotate_cover(list(base), cover_offset)
+            account_job["listing_overrides"] = overrides
     return account_job
 
 
+def published_count(store: MarketplaceStore, family: str) -> int:
+    """Cuantas veces publico el bot este producto, en cualquier cuenta."""
+    with store.connect() as connection:
+        row = connection.execute("SELECT COUNT(*) AS total FROM publications WHERE family_key=?", (family,)).fetchone()
+    return int(row["total"] or 0)
+
+
+def apply_photo_order(
+    store: MarketplaceStore,
+    config: dict[str, Any],
+    safety: dict[str, Any],
+    account: str,
+    family: str,
+    paths: list[str],
+    extra_offset: int = 0,
+) -> tuple[list[str], str]:
+    """Orden final de las fotos de una publicacion: (fotos, modo).
+
+    - "manual": el orden que la persona fijo en el panel para esa cuenta.
+    - "auto": cada publicacion nueva del producto empieza con la foto siguiente,
+      asi se prueban todas las portadas y se comparan en el panel.
+    - "fijo": tal como vienen (variar la portada esta apagado).
+    Se aplica al publicar, de modo que tambien vale para lo ya programado.
+    """
+    paths = [str(path) for path in paths]
+    if not paths:
+        return paths, "fijo"
+    if (config.get("photo_order_manual") or {}).get(account, {}).get(family):
+        preferred = [str(path) for path in (config.get("account_media") or {}).get(account, {}).get(family) or []]
+        chosen = [path for path in preferred if path in paths]
+        return chosen + [path for path in paths if path not in chosen], "manual"
+    if not safety.get("vary_cover", True):
+        return paths, "fijo"
+    return rotate_cover(paths, published_count(store, family) + extra_offset), "auto"
+
+
+def reuse_check(
+    store: MarketplaceStore,
+    account: str,
+    family: str,
+    images: list[Path] | list[str],
+    safety: dict[str, Any],
+    now: datetime | None = None,
+) -> tuple[bool, dict[str, Any] | None]:
+    """Si se puede publicar en la cuenta un producto con estas fotos.
+
+    Devuelve (permitido, informacion de repeticion). Fotos nuevas en la cuenta:
+    (True, None). Fotos ya usadas: solo despues de ``reuse_days`` y si la ultima
+    revision de "Tus anuncios" no muestra un anuncio activo de ese producto; la
+    informacion trae el anuncio agotado que habria que borrar antes de volver a
+    subirlo. Sin revision de esa cuenta no se arriesga.
+    """
+    conflicts = store.media_conflicts(account, list(images))
+    if not conflicts:
+        return True, None
+    current = now or datetime.now()
+    last = max(datetime.fromisoformat(str(row["used_at"])) for row in conflicts)
+    days = (current - last).days
+    if days < int(safety.get("reuse_days", 14)):
+        return False, None
+    scan = store.worker_state(f"listings_scan:{account}")
+    if scan.get("status") != "ok":
+        return False, None
+    import marketplace_listings
+
+    same = [item for item in marketplace_listings.list_listings(store, account) if item["family_key"] == family]
+    if any(item["status"] in {"in_stock", "pending"} for item in same):
+        return False, None
+    old = sorted((item for item in same if item["status"] == "out_of_stock"), key=lambda item: item["listed_on"])
+    replace = old[-1] if old else None
+    return True, {
+        "last_used": last.isoformat(timespec="seconds"),
+        "days": days,
+        "replace_listing": {
+            "key": replace["key"], "title": replace["title"], "listed_on": replace["listed_on"],
+        } if replace else None,
+    }
+
+
+def reuse_detail(reuse: dict[str, Any]) -> str:
+    text = f"Volver a publicar: esta cuenta ya lo publico hace {reuse['days']} dias con estas fotos."
+    old = reuse.get("replace_listing")
+    if old:
+        return text + f" Al aprobar, se borra el anuncio anterior (agotado, del {old['listed_on']}) y se sube de nuevo."
+    return text + " Ya no tiene un anuncio activo de este producto; al aprobar se sube de nuevo."
+
+
+def calendar_lock(store: MarketplaceStore):
+    """Un solo generador a la vez por base de datos.
+
+    El 1 de octubre dos procesos armaron la semana al mismo tiempo, sin ver lo
+    del otro, y dejaron dos publicaciones por espacio con las mismas fotos.
+    """
+    import hashlib
+
+    from marketplace_runtime import AccountLock
+
+    key = hashlib.sha256(str(Path(store.path).resolve()).encode("utf-8")).hexdigest()[:12]
+    return AccountLock(f"calendar_{key}", timeout_seconds=90)
+
+
 def generate_week(
+    store: MarketplaceStore,
+    config: dict[str, Any] | None = None,
+    start_date: date | None = None,
+) -> dict[str, Any]:
+    with calendar_lock(store):
+        return _generate_week(store, config, start_date)
+
+
+def _generate_week(
     store: MarketplaceStore,
     config: dict[str, Any] | None = None,
     start_date: date | None = None,
@@ -229,6 +388,7 @@ def generate_week(
     existing = store.list_queue(statuses=["planned", "queued", "running", "retry", "published"], limit=2000)
     reserved_media: set[tuple[str, str]] = set()
     per_account_day: dict[tuple[str, str], int] = {}
+    taken_slots: set[tuple[str, str]] = set()
     first_publication = {account: store.first_publish_event(account) for account in config["accounts"]}
 
     def day_cap(account: str, moment: datetime) -> int:
@@ -238,6 +398,7 @@ def generate_week(
     for item in existing:
         day_key = (item["account"], str(item.get("scheduled_at") or "")[:10])
         per_account_day[day_key] = per_account_day.get(day_key, 0) + 1
+        taken_slots.add((item["account"], str(item.get("scheduled_at") or "")[:16]))
         family = item.get("family_key") or ""
         if not family:
             continue
@@ -248,6 +409,10 @@ def generate_week(
         key = (item["account"], family)
         if key not in last_used or moment > last_used[key]:
             last_used[key] = moment
+        # Solo reserva lo que falta publicar; las fotos ya publicadas las controla
+        # reuse_check (14 dias y sin anuncio activo).
+        if item["status"] == "published":
+            continue
         for image in store.job_image_paths(item.get("job") or {}):
             reserved_media.add((item["account"], store.image_hash(image)))
 
@@ -280,11 +445,13 @@ def generate_week(
                 images = store.job_image_paths(account_candidate)
                 used_at = last_used.get((account, family))
                 cooldown_ok = used_at is None or slot - used_at >= timedelta(days=cooldown_days)
-                day_full = (
+                slot_taken = (account, slot.isoformat(timespec="minutes")) in taken_slots
+                day_full = slot_taken or (
                     safety["enabled"]
                     and per_account_day.get((account, slot.date().isoformat()), 0) >= day_cap(account, slot)
                 )
-                published_conflict = bool(store.media_conflicts(account, images))
+                reuse_ok, _reuse = reuse_check(store, account, family, images, safety, slot)
+                published_conflict = not reuse_ok
                 reserved_conflict = any((account, store.image_hash(image)) in reserved_media for image in images)
                 if cooldown_ok and not day_full and not published_conflict and not reserved_conflict:
                     eligible_accounts.append(account)
@@ -307,6 +474,9 @@ def generate_week(
             account_slot = slot + timedelta(minutes=account_index * stagger)
             scheduled_text = account_slot.isoformat(timespec="seconds")
             account_job = job_for_account(selected, account, config)
+            _ok, reuse = reuse_check(store, account, family, store.job_image_paths(account_job), safety, account_slot)
+            if reuse:
+                account_job["reuse"] = reuse
             fingerprint = listing_fingerprint(account_job, account)
             queue_id, was_created = store.enqueue(
                 {
@@ -317,8 +487,10 @@ def generate_week(
                     "name": selected.get("name") or ASSISTANT_PRESETS.get(family, {}).get("label") or selected.get("name"),
                     "job": account_job,
                     "fingerprint": fingerprint,
-                    "status": initial_status,
-                    "approved": approved,
+                    # Repetir fotos en una cuenta siempre espera la aprobacion de la persona.
+                    "status": "planned" if reuse else initial_status,
+                    "approved": False if reuse else approved,
+                    "detail": reuse_detail(reuse) if reuse else "",
                     "max_attempts": config["max_attempts"],
                     "dedupe_key": f"{scheduled_text}|{account}|{family}",
                 }
@@ -328,6 +500,7 @@ def generate_week(
                 day_key = (account, account_slot.date().isoformat())
                 per_account_day[day_key] = per_account_day.get(day_key, 0) + 1
                 last_used[(account, family)] = account_slot
+                taken_slots.add((account, scheduled_text[:16]))
                 for image in store.job_image_paths(account_job):
                     reserved_media.add((account, store.image_hash(image)))
     return {
@@ -340,12 +513,16 @@ def generate_week(
     }
 
 
-def approve_items(store: MarketplaceStore, ids: list[str] | None = None) -> int:
+def approve_items(store: MarketplaceStore, ids: list[str] | None = None, include_reuse: bool = True) -> int:
+    """Aprueba lo pendiente. La aprobacion automatica del modo autonomo pasa
+    ``include_reuse=False``: borrar un anuncio y volver a subirlo lo decide la persona."""
     candidates = store.list_queue(statuses=["planned"], limit=2000)
     requested = set(ids or [])
     changed = 0
     for item in candidates:
         if requested and item["id"] not in requested:
+            continue
+        if not include_reuse and (item.get("job") or {}).get("reuse"):
             continue
         if store.update_queue_item(item["id"], status="queued", approved=True):
             changed += 1

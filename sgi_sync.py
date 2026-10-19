@@ -1,7 +1,7 @@
 """Sincroniza el catalogo del SGI y las fotos de Drive con el bot.
 
 Genera los mismos artefactos que el resto del pipeline ya consume:
-``ArticulosGenerados.xlsx`` y ``imagenes_firupost/<FAMILIA-COLOR>/foto_N.ext``.
+``ArticulosGenerados.xlsx`` y ``imagenes_productos/<FAMILIA-COLOR>/foto_N.ext``.
 Una foto de color sirve para todas las tallas, asi que se guarda una sola vez y
 cada talla del Excel apunta a la carpeta de su color.
 
@@ -10,7 +10,8 @@ Reglas (decididas por el propietario):
 - si hay precios distintos entre bodegas o precio en revision, no se publica y
   se reporta;
 - fotos de Drive por ``FAMILIA-COLOR``; si no hay, respaldo con las fotos locales
-  del codigo anterior; si tampoco hay, no se publica y se reporta.
+  (``imagenes_productos/_fotos_locales/FAMILIA-COLOR``, o la carpeta del codigo
+  anterior en instalaciones sin migrar); si tampoco hay, no se publica y se reporta.
 """
 from __future__ import annotations
 
@@ -27,12 +28,13 @@ from typing import Any, Callable, Iterable
 import pandas as pd
 
 from drive_photos import DrivePhoto, product_group
+from marketplace_runtime import images_root
 from sgi_client import PRICE_ISSUE_LABELS, CatalogItem
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 INVENTORY_PATH = SCRATCH_DIR / "ArticulosGenerados.xlsx"
-IMAGES_ROOT = SCRATCH_DIR / "imagenes_firupost"
+IMAGES_ROOT = images_root(SCRATCH_DIR)
 MAPPING_PATH = SCRATCH_DIR / "sgi_codigos_anteriores.json"
 REPORT_PATH = SCRATCH_DIR / "sgi_sync_report.json"
 DRIVE_INDEX_PATH = SCRATCH_DIR / "sgi_drive_index.json"
@@ -42,11 +44,14 @@ LOCAL_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 DEFAULT_LOCATION = "Managua, Nicaragua"
 MAX_PHOTOS = 10
 STAGING_NAME = ".sgi-sync-tmp"
+# Fotos propias guardadas en la PC, por codigo nuevo. Las carpetas de grupo de
+# al lado (CMP-NEG/foto_1.jpg) las arma esta sincronizacion y se reemplazan.
+LOCAL_PHOTOS_NAME = "_fotos_locales"
 
 # Codigos de MKT-GUI-001 y de la plantilla de conteo fisico.
 FAMILY_NAMES = {
     "BOL": "Bolso deportivo",
-    "BSH": "Camisa Bershka",
+    "BSH": "Camisa Bersek",
     "BSK": "Camisa Bersek",
     "CAL": "Calcetas de compresion",
     "CHA": "Chaleco de lana sin mangas",
@@ -84,6 +89,8 @@ COLOR_NAMES = {
     "VER": "Verde",
 }
 COMPRESSION_LEVELS = {"15": "15-20 mmHg", "30": "20-30 mmHg"}
+# Nombre de la familia cuando el codigo no trae nivel de compresion.
+PLAIN_FAMILY_NAMES = {"CAL": "Calcetas"}
 # El constructor de anuncios reconoce XS..XXL, UNI y X como tallas. "2XL" se
 # traduce a XXL; la talla unica se omite para que el titulo quede natural.
 SIZE_TITLES = {"2XL": "XXL", "U": "", "UNI": "", "X": ""}
@@ -100,6 +107,9 @@ def listing_title(item: CatalogItem) -> str:
     if level:
         base = f"{base} {COMPRESSION_LEVELS.get(level.group(1), level.group(1))}"
         color_code = level.group(2)
+    else:
+        # CAL-MUL-U no lleva nivel: son calcetas comunes, no de compresion.
+        base = PLAIN_FAMILY_NAMES.get(family, base)
     color = COLOR_NAMES.get(color_code, color_code.capitalize())
     size_text = SIZE_TITLES.get(size, size)
     variant = ", ".join(value for value in (color, size_text) if value)
@@ -156,12 +166,31 @@ def plain_label(value: Any) -> str:
     return " ".join(text.lower().split())
 
 
-def local_photos(old_code: str, images_root: Path = IMAGES_ROOT) -> list[Path]:
-    folder = images_root / old_code
+def local_photos(group: str, images_root: Path = IMAGES_ROOT, old_code: str | None = None) -> list[Path]:
+    """Fotos locales de un grupo: primero ``_fotos_locales/<grupo>``, luego la
+    carpeta del codigo anterior (instalaciones que aun no consolidaron)."""
+    for folder in (images_root / LOCAL_PHOTOS_NAME / group, images_root / old_code if old_code else None):
+        if folder is None or not folder.is_dir():
+            continue
+        photos = [path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in LOCAL_IMAGE_EXTENSIONS]
+        if photos:
+            return sorted(photos, key=local_photo_order)[:MAX_PHOTOS]
+    return []
+
+
+def local_photo_order(path: Path) -> tuple[int, str]:
+    """``CMP-NEG - Camisa negra - 002.jpg`` va por su numero aunque cambie la descripcion."""
+    number = re.search(r"(\d+)\s*$", path.stem)
+    return (int(number.group(1)) if number else 0, path.name)
+
+
+def current_photos(group: str, images_root: Path = IMAGES_ROOT) -> list[Path]:
+    """Fotos ya preparadas para un grupo (``imagenes_firupost/CMP-BLA/foto_1.jpg``)."""
+    folder = images_root / group
     if not folder.is_dir():
         return []
-    photos = [path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in LOCAL_IMAGE_EXTENSIONS]
-    return sorted(photos, key=lambda path: path.name)[:MAX_PHOTOS]
+    photos = [path for path in folder.glob("foto_*") if path.suffix.lower() in LOCAL_IMAGE_EXTENSIONS]
+    return sorted(photos, key=lambda path: int(re.sub(r"\D", "", path.stem) or 0))
 
 
 def _write_json_atomic(path: Path, payload: Any) -> None:
@@ -173,10 +202,11 @@ def _write_json_atomic(path: Path, payload: Any) -> None:
 def run_sync(
     catalog: Iterable[CatalogItem],
     drive_groups: dict[str, list[DrivePhoto]],
-    download: Callable[[DrivePhoto], Path],
+    download: Callable[[DrivePhoto], Path | None],
     mapping: dict[str, str],
     *,
     categories: Callable[[str], str] | None = None,
+    drive_offline: str = "",
     images_root: Path = IMAGES_ROOT,
     inventory_path: Path = INVENTORY_PATH,
     report_path: Path = REPORT_PATH,
@@ -191,6 +221,9 @@ def run_sync(
         "without_photos": [],
         "drive_photos": [],
         "local_photos": [],
+        # Sin autorizacion de Drive se sigue con las fotos ya descargadas: el
+        # inventario y los precios del SGI no dependen de Drive.
+        "drive_offline": drive_offline,
     }
     rows: list[dict[str, Any]] = []
     staged: dict[str, list[str]] = {}
@@ -221,10 +254,16 @@ def run_sync(
                 names = staged[group]
                 origin = "drive_photos" if drive_groups.get(group) else "local_photos"
             else:
-                sources: list[Path] = [download(photo) for photo in drive_groups.get(group, [])]
+                sources: list[Path] = [
+                    path for path in (download(photo) for photo in drive_groups.get(group, [])) if path
+                ]
                 origin = "drive_photos" if sources else ""
-                if not sources and old_code:
-                    sources = local_photos(old_code, images_root)
+                if not sources and drive_offline:
+                    # Sin Drive, la carpeta que dejo la ultima sincronizacion sigue valiendo.
+                    sources = current_photos(group, images_root)
+                    origin = "drive_photos" if sources else ""
+                if not sources:
+                    sources = local_photos(group, images_root, old_code)
                     origin = "local_photos" if sources else ""
                 if not sources:
                     report["without_photos"].append({"code": item.code, "old_code": old_code})
@@ -337,20 +376,43 @@ def revalidate_from_report(report: dict[str, Any], sku_prefixes: Iterable[str]) 
 
 
 def sync_from_local_configuration(*, refresh_drive: bool = False, authorize_drive: bool = False) -> dict[str, Any]:
-    from drive_photos import DEFAULT_EXCLUDED_FOLDERS, DriveLibrary, group_photos
+    from drive_photos import DEFAULT_EXCLUDED_FOLDERS, DriveLibrary, DriveNotAuthorized, group_photos, offline_download
     from marketplace_catalog import category_for_sku
     from sgi_client import SgiClient, load_settings
 
     settings = load_settings()
     drive_settings = settings.get("drive") or {}
     catalog = SgiClient.from_local_configuration().catalog()
-    library = DriveLibrary.connect(interactive=authorize_drive)
+    try:
+        library = DriveLibrary.connect(interactive=authorize_drive)
+    except DriveNotAuthorized as exc:
+        if authorize_drive:
+            raise
+        # Drive solo trae fotos nuevas. Sin permiso se publica con lo ya
+        # descargado en vez de frenar todo el bot (eso bloqueo 9 anuncios).
+        return run_sync(
+            catalog,
+            group_photos(load_cached_drive_index()),
+            offline_download(),
+            load_mapping(),
+            categories=category_for_sku,
+            drive_offline=str(exc),
+        )
     roots = [str(folder) for folder in drive_settings.get("root_folder_ids") or []]
     # Una lista vacia es una decision explicita: buscar tambien en esas carpetas.
     excluded = drive_settings.get("excluded_folder_names", list(DEFAULT_EXCLUDED_FOLDERS))
     max_age = 0 if refresh_drive else float((settings.get("sync") or {}).get("max_drive_index_age_minutes", 60)) * 60
     files = cached_drive_files(lambda: library.list_image_files(roots, excluded), max_age_seconds=max_age)
     return run_sync(catalog, group_photos(files), library.download, load_mapping(), categories=category_for_sku)
+
+
+def load_cached_drive_index(path: Path = DRIVE_INDEX_PATH) -> list[dict[str, Any]]:
+    """El ultimo listado de Drive, sin importar su antiguedad."""
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return cached if isinstance(cached, list) else []
 
 
 def main() -> None:

@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Marketplace Bot Dashboard</title>
+  <title>Bot Marketplace La Comarca</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   <header>
     <div class="brand">
-      <div class="brand-mark">F</div>
-      <h1>FiruPost Marketplace Bot</h1>
+      <div class="brand-mark">LC</div>
+      <h1>Bot Marketplace La Comarca</h1>
     </div>
     <div class="toolbar">
       <span id="saveState" class="pill">Sin guardar</span>
@@ -22,6 +22,7 @@
     <nav>
       <button data-tab="assistant" class="active">Nueva publicación</button>
       <button data-tab="autonomy">Automatización</button>
+      <button data-tab="listings">Anuncios</button>
       <button data-tab="overview">Actividad</button>
       <button data-tab="inventory">Inventario</button>
       <button data-tab="accounts">Cuentas</button>
@@ -218,6 +219,10 @@
                   </select>
                   <small id="autoStrategyHelp" class="field-help"></small>
                 </div>
+                <div class="field">
+                  <label class="toggle-line"><input id="autoAiEnabled" type="checkbox"> Usar IA en descripciones y etiquetas</label>
+                  <small id="autoAiHelp" class="field-help"></small>
+                </div>
               </fieldset>
 
               <fieldset class="rules-card">
@@ -278,12 +283,15 @@
                   <div class="field"><label for="safetyCross">Separación entre cuentas</label><div class="input-unit"><input id="safetyCross" type="number" min="0" step="15"><span>minutos</span></div></div>
                   <div class="field"><label for="safetyRepeat">Repetir un producto en la misma cuenta</label><div class="input-unit"><input id="safetyRepeat" type="number" min="0" max="60"><span>días mínimo</span></div></div>
                   <div class="field"><label for="safetyFailures">Pausar tras fallos seguidos</label><div class="input-unit"><input id="safetyFailures" type="number" min="1" max="10"><span>fallos</span></div></div>
+                  <div class="field"><label for="safetyGlobalGap">Separación entre cualquier anuncio</label><div class="input-unit"><input id="safetyGlobalGap" type="number" min="0" max="240" step="5"><span>minutos</span></div></div>
+                  <div class="field"><label for="safetyReuse">Volver a subir con fotos ya usadas en la cuenta</label><div class="input-unit"><input id="safetyReuse" type="number" min="1" max="120"><span>días después</span></div></div>
                 </div>
                 <div class="safety-toggles">
                   <label class="toggle-line"><input id="safetyWarmup" type="checkbox"> Calentamiento de cuentas nuevas <small>1 anuncio al día la primera semana y 2 la segunda</small></label>
                   <label class="toggle-line"><input id="safetyVary" type="checkbox"> Variar título y descripción entre cuentas <small>evita anuncios idénticos</small></label>
+                  <label class="toggle-line"><input id="safetyCover" type="checkbox"> Variar la foto de portada entre cuentas <small>cada cuenta abre con otra foto; se compara cuál atrae más</small></label>
                 </div>
-                <small class="field-help">Si Facebook muestra un aviso de límite o restricción, la cuenta se pausa sola 72 horas. Tras fallos seguidos descansa 12 horas.</small>
+                <small class="field-help">Si Facebook muestra un aviso de límite o restricción, la cuenta se pausa sola 72 horas. Tras fallos seguidos descansa 12 horas. Volver a subir un producto con fotos ya usadas solo se propone si la cuenta ya no tiene un anuncio activo de él, y siempre espera tu aprobación.</small>
               </fieldset>
             </div>
             <div id="autoRulesSummary" class="rules-summary" aria-live="polite"></div>
@@ -337,6 +345,48 @@
           <div class="assistant-section">
             <div class="section-heading"><div><span class="step-label">Resumen</span><h3>Últimos 7 días</h3></div></div>
             <div id="autoReport" class="table-wrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="listings" class="tab hidden">
+        <div class="assistant-shell">
+          <div class="autonomy-top">
+            <div>
+              <h2>Anuncios publicados</h2>
+              <p class="muted">Cuántos días lleva cada anuncio, cuánto interés tiene y qué conviene hacer. El bot los revisa una vez al día dentro de su horario.</p>
+            </div>
+            <button id="listingsScanBtn" class="primary">Revisar ahora</button>
+          </div>
+
+          <div id="listingsMetrics" class="metric-strip"></div>
+          <div id="listingsScans" class="scan-strip"></div>
+
+          <div class="assistant-section">
+            <div class="section-heading">
+              <div><span class="step-label">Recomendaciones</span><h3>Qué hacer con cada anuncio</h3></div>
+              <div class="toolbar listings-filters">
+                <select id="listingsAccount" aria-label="Cuenta"></select>
+                <select id="listingsFilter" aria-label="Mostrar">
+                  <option value="todo">Necesitan algo</option>
+                  <option value="active">Activos</option>
+                  <option value="all">Todos</option>
+                </select>
+              </div>
+            </div>
+            <div id="listingsTable" class="table-wrap"></div>
+            <small class="field-help">Clics = visitas a la ficha del anuncio en los últimos 14 días, según Facebook. Renovar sube el anuncio sin crear uno nuevo; Facebook lo permite desde el día 7. Si el SGI se queda sin stock de un producto, el bot marca su anuncio agotado solo.</small>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading"><div><span class="step-label">Prueba A/B</span><h3>Qué foto de portada atrae más</h3></div></div>
+            <p class="muted">Cada cuenta publica el mismo producto con otra foto de portada. Aquí se comparan los clics por día de cada portada. Las cuentas no tienen el mismo alcance, así que espera a tener varias publicaciones antes de sacar conclusiones.</p>
+            <div id="listingsCovers" class="cover-grid"></div>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading"><div><span class="step-label">Historial</span><h3>Acciones recientes</h3></div></div>
+            <div id="listingsActions" class="table-wrap"></div>
           </div>
         </div>
       </section>

@@ -20,7 +20,7 @@ import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from marketplace_storage import MarketplaceStore, now_iso
 
@@ -64,6 +64,15 @@ DEFAULT_SAFETY: dict[str, Any] = {
     "failure_pause_hours": 12,
     "restriction_pause_hours": 72,
     "vary_copy": True,
+    # Entre dos anuncios de cualquier cuenta. Evita que, al despertar la PC, las
+    # tres cuentas publiquen lo atrasado en el mismo minuto.
+    "global_gap_minutes": 30,
+    # Cada cuenta abre el anuncio con otra foto: no son anuncios identicos y
+    # se puede comparar que portada atrae mas.
+    "vary_cover": True,
+    # Dias para volver a publicar en una cuenta un producto con fotos que esa
+    # cuenta ya uso, si ya no tiene un anuncio activo de el (siempre se pregunta).
+    "reuse_days": 14,
 }
 
 # Fallos que dicen algo de la cuenta o del formulario. Un SGI caido o una foto
@@ -131,6 +140,9 @@ def normalize_safety(raw: dict[str, Any] | None = None) -> dict[str, Any]:
     config["failure_pause_hours"] = _int(config.get("failure_pause_hours"), 12, 1, 24 * 7)
     config["restriction_pause_hours"] = _int(config.get("restriction_pause_hours"), 72, 1, 24 * 30)
     config["vary_copy"] = bool(config.get("vary_copy", True))
+    config["global_gap_minutes"] = _int(config.get("global_gap_minutes"), 30, 0, 240)
+    config["vary_cover"] = bool(config.get("vary_cover", True))
+    config["reuse_days"] = _int(config.get("reuse_days"), 14, 1, 120)
     return config
 
 
@@ -331,6 +343,14 @@ def check_can_publish(
             f"La cuenta ya publico {usage['week']} de {config['max_per_account_week']} anuncios en 7 dias.",
             retry.isoformat(timespec="seconds"),
         )
+    last_any = _parse(store.last_publish_event_any())
+    if last_any and config["global_gap_minutes"] and current - last_any < timedelta(minutes=config["global_gap_minutes"]):
+        retry = last_any + timedelta(minutes=config["global_gap_minutes"])
+        return (
+            False, "GLOBAL_GAP",
+            f"Otra cuenta publico hace poco; faltan {int((retry - current).total_seconds() // 60) + 1} min.",
+            retry.isoformat(timespec="seconds"),
+        )
     last = _parse(usage["last_at"]) if usage["last_at"] else None
     if last and config["min_gap_minutes"] and current - last < timedelta(minutes=config["min_gap_minutes"]):
         retry = last + timedelta(minutes=config["min_gap_minutes"])
@@ -342,8 +362,16 @@ def check_can_publish(
     return True, "", "", ""
 
 
-def record_publication(store: MarketplaceStore, account: str, name: str = "", source: str = "") -> None:
-    store.record_publish_event(account, name, source)
+def record_publication(
+    store: MarketplaceStore,
+    account: str,
+    name: str = "",
+    source: str = "",
+    cover: str = "",
+    description: str = "",
+    tags: Iterable[str] = (),
+) -> None:
+    store.record_publish_event(account, name, source, cover=cover, description=description, tags=tags)
     register_outcome(store, account, True)
 
 

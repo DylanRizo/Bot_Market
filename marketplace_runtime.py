@@ -10,6 +10,38 @@ from typing import Any
 SCRATCH_DIR = Path(__file__).resolve().parent
 LOCKS_DIR = SCRATCH_DIR / "marketplace_runtime_locks"
 
+# La carpeta de fotos locales se llamaba "imagenes_firupost". Las instalaciones
+# que aun la conservan siguen funcionando; migrar_nombres_antiguos.py la renombra.
+IMAGES_DIR_NAME = "imagenes_productos"
+LEGACY_IMAGES_DIR_NAME = "imagenes_firupost"
+
+
+def images_root(base: Path = SCRATCH_DIR) -> Path:
+    """Carpeta de fotos locales: la nueva, o la anterior si es la unica que existe."""
+    current = base / IMAGES_DIR_NAME
+    legacy = base / LEGACY_IMAGES_DIR_NAME
+    return legacy if not current.exists() and legacy.is_dir() else current
+
+
+def alias_images_path(path: Path) -> Path:
+    """Traduce una ruta guardada con el nombre anterior (o el nuevo) al que existe.
+
+    Los trabajos y campanas guardados antes del cambio de nombre apuntan a
+    ``imagenes_firupost``; los nuevos, a ``imagenes_productos``.
+    """
+    path = Path(path)
+    if path.exists():
+        return path
+    for source, target in (
+        (LEGACY_IMAGES_DIR_NAME, IMAGES_DIR_NAME),
+        (IMAGES_DIR_NAME, LEGACY_IMAGES_DIR_NAME),
+    ):
+        if source in path.parts:
+            candidate = Path(*[target if part == source else part for part in path.parts])
+            if candidate.exists():
+                return candidate
+    return path
+
 
 def safe_key(value: str) -> str:
     return "".join(character if character.isalnum() or character in "-_" else "_" for character in value) or "default"

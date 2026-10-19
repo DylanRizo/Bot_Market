@@ -14,7 +14,9 @@ if (-not $listener) {
     if (Test-Path -LiteralPath $tokenFile) { Remove-Item -LiteralPath $tokenFile -Force }
     $arguments = "`"$dashboard`" --port $Port --no-open"
     Start-Process -FilePath python.exe -ArgumentList $arguments -WorkingDirectory $scratchDir -WindowStyle Hidden
-    $deadline = (Get-Date).AddSeconds(15)
+    # Al arrancar, el panel carga las librerias de Google y revisa la base; en
+    # frio puede tardar mas de 15 segundos.
+    $deadline = (Get-Date).AddSeconds(60)
     do {
         Start-Sleep -Milliseconds 500
         $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue

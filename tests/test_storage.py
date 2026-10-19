@@ -159,3 +159,14 @@ def test_listing_fingerprint_cambia_con_la_cuenta():
     job = {"family_key": "durags", "name": "Durags", "skus": ["DG-1"]}
     assert listing_fingerprint(job, "cuenta1") != listing_fingerprint(job, "cuenta2")
     assert listing_fingerprint(job, "cuenta1") == listing_fingerprint(dict(job), "cuenta1")
+
+
+def test_una_alerta_repetida_no_se_duplica(store):
+    primera = store.create_alert("critical", "DRIVE_NOT_AUTHORIZED", "sin permiso")
+    segunda = store.create_alert("warning", "DRIVE_NOT_AUTHORIZED", "sigue sin permiso")
+    assert primera == segunda
+    abiertas = store.list_alerts()
+    assert len(abiertas) == 1 and abiertas[0]["message"] == "sigue sin permiso"
+    store.resolve_alert(primera)
+    assert store.create_alert("warning", "DRIVE_NOT_AUTHORIZED", "otra vez") != primera
+    assert store.create_alert("warning", "DRIVE_NOT_AUTHORIZED", "en otra cuenta", account="cuenta1") != primera

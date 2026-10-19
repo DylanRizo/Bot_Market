@@ -2,6 +2,8 @@
     let assistantReview = {};
     let customPhotos = [];
     let autoPhotoDraft = {};
+    // Productos con orden de fotos fijado a mano, por cuenta: {cuenta: {familia: true}}.
+    let autoPhotoManual = {};
     let autoPhotoDraftDirty = false;
     let dirty = false;
     // Mientras la persona edita las reglas, el refresco periodico no debe pisarlas.
@@ -71,7 +73,30 @@
           autoPhotoDraft[account][product.key] = (defined?.length ? defined : product.images).map(image => image.id);
         });
       });
+      autoPhotoManual = JSON.parse(JSON.stringify(state.autonomy?.config?.photo_order_manual || {}));
       autoPhotoDraftDirty = false;
+    }
+
+    function photoOrderStrip(account, product) {
+      const ids = autoPhotoDraft[account]?.[product.key] || [];
+      const ordered = ids.map(id => product.images.find(image => image.id === id)).filter(Boolean);
+      const manual = Boolean(autoPhotoManual[account]?.[product.key]);
+      const toggle = `<label class="toggle-line order-toggle"><input type="checkbox" data-order-manual-account="${escapeHtml(account)}" data-order-manual-family="${escapeHtml(product.key)}" ${manual ? "checked" : ""}> Orden manual</label>`;
+      if (!manual) {
+        return `<div class="photo-order">${toggle}<small class="muted">Automático: cada publicación nueva de este producto abre con la foto siguiente, así se prueban todas las portadas.</small></div>`;
+      }
+      if (!ordered.length) return `<div class="photo-order">${toggle}<small class="muted">Marca fotos arriba para ordenarlas.</small></div>`;
+      return `<div class="photo-order">${toggle}
+        <div class="order-strip">${ordered.map((image, index) => `<div class="order-item ${index === 0 ? "order-cover" : ""}">
+          <img src="${escapeHtml(image.url)}" alt="Foto ${index + 1}">
+          <span>${index === 0 ? "Portada" : `${index + 1}`}</span>
+          <div class="order-buttons">
+            <button type="button" title="Mover antes" data-order-move="-1" data-order-account="${escapeHtml(account)}" data-order-family="${escapeHtml(product.key)}" data-order-id="${escapeHtml(image.id)}" ${index === 0 ? "disabled" : ""}>&larr;</button>
+            <button type="button" title="Mover después" data-order-move="1" data-order-account="${escapeHtml(account)}" data-order-family="${escapeHtml(product.key)}" data-order-id="${escapeHtml(image.id)}" ${index === ordered.length - 1 ? "disabled" : ""}>&rarr;</button>
+          </div>
+        </div>`).join("")}</div>
+        <small class="muted">La primera foto es la portada. Pulsa "Guardar reglas" para aplicar el orden.</small>
+      </div>`;
     }
 
     function renderAutoPhotoAssignments() {
@@ -110,6 +135,7 @@
           return `<div class="photo-account"><strong>${escapeHtml(accounts[account]?.display_name || account)}</strong>
             ${choices || '<span class="muted">Sin fotos disponibles</span>'}
             <span class="photo-count">${selected.size} fotos seleccionadas</span>
+            ${choices ? photoOrderStrip(account, product) : ""}
           </div>`;
         }).join("")}</div>
       </article>`).join("");
@@ -123,8 +149,35 @@
             toast("Solo se pueden usar hasta 10 fotos por publicación");
             return;
           }
-          input.checked ? selected.add(input.value) : selected.delete(input.value);
-          autoPhotoDraft[account][family] = [...selected];
+          // Conserva el orden elegido: una foto nueva va al final.
+          const current = autoPhotoDraft[account]?.[family] || [];
+          autoPhotoDraft[account][family] = input.checked
+            ? [...current.filter(id => id !== input.value), input.value]
+            : current.filter(id => id !== input.value);
+          autoPhotoDraftDirty = true;
+          setDirty();
+          renderAutoPhotoAssignments();
+        };
+      });
+      document.querySelectorAll("[data-order-manual-account]").forEach(input => {
+        input.onchange = () => {
+          const account = input.dataset.orderManualAccount;
+          const family = input.dataset.orderManualFamily;
+          (autoPhotoManual[account] ||= {})[family] = input.checked;
+          autoPhotoDraftDirty = true;
+          setDirty();
+          renderAutoPhotoAssignments();
+        };
+      });
+      document.querySelectorAll("[data-order-move]").forEach(button => {
+        button.onclick = () => {
+          const { orderAccount: account, orderFamily: family, orderId: id } = button.dataset;
+          const list = [...(autoPhotoDraft[account]?.[family] || [])];
+          const from = list.indexOf(id);
+          const to = from + Number(button.dataset.orderMove);
+          if (from < 0 || to < 0 || to >= list.length) return;
+          [list[from], list[to]] = [list[to], list[from]];
+          autoPhotoDraft[account][family] = list;
           autoPhotoDraftDirty = true;
           setDirty();
           renderAutoPhotoAssignments();
@@ -351,6 +404,9 @@
       $("safetyFailures").value = safety.failure_pause_threshold ?? 2;
       $("safetyWarmup").checked = safety.warmup_enabled !== false;
       $("safetyVary").checked = safety.vary_copy !== false;
+      $("safetyCover").checked = safety.vary_cover !== false;
+      $("safetyGlobalGap").value = safety.global_gap_minutes ?? 30;
+      $("safetyReuse").value = safety.reuse_days ?? 14;
       toggleSafetyFields();
     }
 
@@ -387,17 +443,34 @@
         failure_pause_threshold: Number($("safetyFailures").value || 2),
         warmup_enabled: $("safetyWarmup").checked,
         vary_copy: $("safetyVary").checked,
+        vary_cover: $("safetyCover").checked,
+        global_gap_minutes: Number($("safetyGlobalGap").value || 0),
+        reuse_days: Number($("safetyReuse").value || 14),
       };
     }
 
     function renderRulesHelp() {
       $("autoModeHelp").textContent = MODE_HELP[$("autoMode").value] || "";
       $("autoStrategyHelp").textContent = STRATEGY_HELP[$("autoAccountStrategy").value] || "";
+      renderAiHelp();
+    }
+
+    function renderAiHelp() {
+      const configured = Boolean(state.ai?.configured);
+      const box = $("autoAiEnabled");
+      // Sin clave no se puede encender, pero si ya estaba encendido se puede apagar.
+      box.disabled = !configured && !box.checked;
+      $("autoAiHelp").textContent = !configured
+        ? "Falta la clave de OpenAI: configúrala en Asistente > Configurar IA."
+        : box.checked
+          ? `Cada anuncio pide a OpenAI (${state.ai.model}) la descripción y las etiquetas, con un costo pequeño por publicación. Si la IA falla, se publica con el texto del bot. Los títulos los sigue armando el bot.`
+          : "Apagado: el bot redacta solo, sin costo, y varía el texto entre cuentas.";
     }
 
     function renderAutonomyForm(autonomy, config, accounts) {
       $("autoMode").value = config.mode || "supervised";
       $("autoAccountStrategy").value = config.account_strategy || "round_robin";
+      $("autoAiEnabled").checked = Boolean(config.ai_descriptions);
       const selectedAccounts = new Set(config.accounts || [config.account]);
       $("autoAccounts").innerHTML = Object.keys(accounts).map(key => `<label class="weekday-choice"><input type="checkbox" value="${escapeHtml(key)}" ${selectedAccounts.has(key) ? "checked" : ""}> ${escapeHtml(accounts[key].display_name || key)}</label>`).join("");
       $("autoAccounts").querySelectorAll("input").forEach(input => input.onchange = () => {
@@ -554,15 +627,18 @@
           ${dayItems.length ? dayItems.map(item => {
             const value = String(item.scheduled_at || "").slice(0, 16);
             const canCancel = ["planned", "queued", "retry", "blocked"].includes(item.status);
-            return `<div class="calendar-item ${escapeHtml(item.statusClass)}">
+            const cover = item.cover ? `<div class="calendar-cover" title="${item.cover.mode === "manual" ? "Portada fijada a mano" : item.cover.mode === "auto" ? "Portada rotada automáticamente" : "Portada"}">
+              <img src="${escapeHtml(item.cover.url)}" alt="Portada"><small>${item.cover.mode === "manual" ? "Portada manual" : item.cover.mode === "auto" ? "Portada automática" : "Portada"}</small></div>` : "";
+            return `<div class="calendar-item ${escapeHtml(item.statusClass)}">${cover}
               <span>${escapeHtml(value.slice(11))} · ${escapeHtml(labels[item.status] || item.status)}</span>
               <strong>${escapeHtml(String(item.name || "").replace(/ - automatico$/, ""))}</strong>
               <span>${escapeHtml(accountName(item.account))}${item.job?.category ? ` · <small>${escapeHtml(item.job.category)}</small>` : ""}</span>
+              ${item.job?.reuse && item.status === "planned" ? `<small class="calendar-reuse">${escapeHtml(item.detail || "Volver a publicar")}</small>` : ""}
               ${["blocked", "retry"].includes(item.status) || (item.status === "queued" && item.detail) ? `<small class="calendar-detail">${escapeHtml(item.detail || "")}</small>` : ""}
               <input type="datetime-local" value="${escapeHtml(value)}" data-move-value="${escapeHtml(item.id)}">
               <div class="calendar-actions">
                 <button data-auto-action="move" data-id="${escapeHtml(item.id)}" title="Cambiar hora">Mover</button>
-                ${item.status === "planned" ? `<button data-auto-action="approve" data-id="${escapeHtml(item.id)}">Aprobar</button>` : ""}
+                ${item.status === "planned" ? `<button data-auto-action="approve" data-id="${escapeHtml(item.id)}">${item.job?.reuse?.replace_listing ? "Aprobar: borrar y volver a subir" : "Aprobar"}</button>` : ""}
                 ${item.status === "blocked" ? `<button data-auto-action="retry" data-id="${escapeHtml(item.id)}">Reintentar</button>` : ""}
                 ${canCancel ? `<button data-auto-action="cancel" data-id="${escapeHtml(item.id)}">Omitir</button>` : ""}
               </div>
@@ -681,6 +757,7 @@
         mode: $("autoMode").value,
         accounts: [...$("autoAccounts").querySelectorAll("input:checked")].map(input => input.value),
         account_strategy: $("autoAccountStrategy").value,
+        ai_descriptions: $("autoAiEnabled").checked,
         start_time: $("autoStart").value,
         end_time: $("autoEnd").value,
         max_per_day: Number($("autoMaxDaily").value || 3),
@@ -690,6 +767,7 @@
         active_days: [...$("autoDays").querySelectorAll("input:checked")].map(input => Number(input.value)),
         selected_families: [...$("autoFamilies").querySelectorAll("input:checked")].map(input => input.value),
         account_photo_assignments: autoPhotoDraft,
+        photo_order_manual: autoPhotoManual,
       };
     }
 
@@ -722,6 +800,8 @@
     }
 
     async function approveAutonomyWeek() {
+      const reuse = (state.autonomy?.queue || []).filter(item => item.status === "planned" && item.job?.reuse?.replace_listing);
+      if (reuse.length && !confirm(`Se aprobarán todas las publicaciones pendientes. ${reuse.length} de ellas borran el anuncio anterior (agotado) y lo vuelven a subir. ¿Continuar?`)) return;
       const result = await api("/api/autonomy/approve", { method: "POST", body: "{}" });
       state.autonomy = result.autonomy;
       renderAutonomy();
@@ -729,6 +809,11 @@
     }
 
     async function autonomyItemAction(id, action) {
+      if (action === "approve") {
+        const item = (state.autonomy?.queue || []).find(entry => entry.id === id);
+        const old = item?.job?.reuse?.replace_listing;
+        if (old && !confirm(`Se borrará el anuncio anterior "${old.title}" (agotado, del ${old.listed_on}) y se volverá a subir este producto. ¿Continuar?`)) return;
+      }
       if (action === "retry") {
         const item = (state.autonomy?.queue || []).find(entry => entry.id === id);
         if (item && /Publish/i.test(item.detail || "") && /incierto|puede haberse creado|puede existir/i.test(item.detail || "")) {
@@ -1083,7 +1168,7 @@
         job.group_by = "size";
       }
       job.source_excel = job.source_excel || job.excel || "ArticulosGenerados.xlsx";
-      job.images_root = job.images_root || "imagenes_firupost";
+      job.images_root = job.images_root || "imagenes_productos";
     }
 
     function renderJobs() {
@@ -1107,7 +1192,7 @@
             <div class="col-3"><label>Cuenta</label><select data-field="account">${accountOptions(job.account || state.campaign.default_account)}</select></div>
             <div class="col-3"><label>Item interval min</label><input data-field="item_interval_minutes" type="number" min="0" value="${job.item_interval_minutes ?? ""}"></div>
             <div class="col-3"><label>Excel/source</label><input data-field="excel" value="${job.source_excel || job.excel || "ArticulosGenerados.xlsx"}"></div>
-            <div class="col-3"><label>Imagenes</label><input data-field="images_root" value="${job.images_root || "imagenes_firupost"}"></div>
+            <div class="col-3"><label>Imagenes</label><input data-field="images_root" value="${job.images_root || "imagenes_productos"}"></div>
             <div class="col-3"><label>Row index</label><input data-field="row_index" type="number" min="0" value="${job.row_index ?? 0}"></div>
             <div class="col-3"><label>SKUs</label><input data-field="skus" value="${arrayText(job.skus)}" placeholder="TSBK-M,TSBK-L"></div>
             <div class="col-3"><label>Prefijos SKU</label><input data-field="sku_prefixes" value="${arrayText(job.sku_prefixes)}" placeholder="TS,CC"></div>
@@ -1242,7 +1327,7 @@
             enabled: false,
             delay_minutes: 0,
             excel: "ArticulosGenerados.xlsx",
-            images_root: "imagenes_firupost",
+            images_root: "imagenes_productos",
             row_index: row.index,
           });
           setDirty();
@@ -1374,6 +1459,7 @@
         $("aiKeyInput").value = "";
         $("aiDialog").classList.add("hidden");
         renderAssistantAiStatus();
+        renderAiHelp();
         renderAssistantSummary();
         toast("IA configurada");
       } catch (error) {
@@ -1445,14 +1531,154 @@
       renderOverview();
     }
 
+    // --- Anuncios publicados ---------------------------------------------------
+    let listingsState = { listings: [], actions: [], scans: {}, labels: {} };
+    const LISTING_STATUS = { in_stock: "Activo", out_of_stock: "Agotado", sold: "Vendido", pending: "Pendiente", unknown: "?" };
+    const REC_TONE = {
+      wait: "info", keep: "ok", none: "muted", renew: "warn", review: "warn", edit: "warn",
+      delete: "danger", relist: "warn", mark_out_of_stock: "danger", mark_available: "warn",
+    };
+    const NEEDS_SOMETHING = new Set(["renew", "review", "edit", "delete", "relist", "mark_out_of_stock", "mark_available"]);
+    const ACTION_STATUS = { pending: "En cola", running: "En curso", done: "Hecha", failed: "Falló", cancelled: "Cancelada" };
+
+    async function loadListings() {
+      const payload = await api("/api/listings");
+      listingsState = payload.listings;
+      renderListings();
+    }
+
+    function daysText(days) {
+      if (days === null || days === undefined) return "?";
+      return days === 0 ? "hoy" : days === 1 ? "1 día" : `${days} días`;
+    }
+
+    function renderListings() {
+      const items = listingsState.listings || [];
+      const labels = listingsState.labels || {};
+      const accountSelect = $("listingsAccount");
+      const accounts = Object.keys(state.accounts?.accounts || {});
+      const chosen = accountSelect.value;
+      accountSelect.innerHTML = `<option value="">Todas las cuentas</option>` + accounts.map(key => `<option value="${escapeHtml(key)}">${escapeHtml(accountName(key))}</option>`).join("");
+      accountSelect.value = accounts.includes(chosen) ? chosen : "";
+
+      const active = items.filter(item => item.status === "in_stock");
+      const needs = items.filter(item => NEEDS_SOMETHING.has(item.recommendation));
+      const clicks = active.reduce((sum, item) => sum + (item.clicks_14d || 0), 0);
+      const metric = (value, label) => `<div class="metric"><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span></div>`;
+      $("listingsMetrics").innerHTML = [
+        metric(active.length, "Anuncios activos"),
+        metric(needs.length, "Necesitan algo"),
+        metric(clicks, "Clics en 14 días (activos)"),
+        metric(items.filter(item => item.status === "sold").length, "Vendidos"),
+      ].join("");
+
+      const scans = listingsState.scans || {};
+      $("listingsScans").innerHTML = accounts.map(key => {
+        const scan = scans[key] || {};
+        const when = scan.scanned_at ? shortDate(scan.scanned_at) : "nunca";
+        const text = scan.status === "error" ? `error: ${scan.detail || scan.code || ""}` : scan.status === "requested" ? "revisión pedida" : `última revisión ${when}`;
+        return `<span class="scan-chip ${scan.status === "error" ? "warn-text" : ""}"><b>${escapeHtml(accountName(key))}</b> · ${escapeHtml(text)}</span>`;
+      }).join("");
+
+      const filter = $("listingsFilter").value;
+      let rows = items.filter(item => !accountSelect.value || item.account === accountSelect.value);
+      if (filter === "todo") rows = rows.filter(item => NEEDS_SOMETHING.has(item.recommendation) || item.pending_action);
+      if (filter === "active") rows = rows.filter(item => item.status === "in_stock");
+      rows.sort((a, b) => (NEEDS_SOMETHING.has(b.recommendation) - NEEDS_SOMETHING.has(a.recommendation)) || String(b.listed_on).localeCompare(String(a.listed_on)));
+
+      $("listingsTable").innerHTML = rows.length ? `<table class="listings-table">
+        <thead><tr><th>Anuncio</th><th>Cuenta</th><th>Estado</th><th>Publicado</th><th>Clics</th><th>Recomendación</th><th></th></tr></thead>
+        <tbody>${rows.map(item => {
+          const rec = item.recommendation || "none";
+          const pending = item.pending_action;
+          const button = pending
+            ? `<span class="muted">${escapeHtml(labels[pending.action] || pending.action)} en cola</span> <button data-listing-cancel="${pending.id}">Cancelar</button>`
+            : item.executable ? `<button class="${rec === "delete" ? "danger" : "primary"}" data-listing-key="${escapeHtml(item.key)}" data-listing-action="${escapeHtml(rec)}">${escapeHtml(labels[rec] || rec)}</button>` : "";
+          return `<tr>
+            <td><strong>${escapeHtml(item.title)}</strong><br><span class="muted">C$ ${escapeHtml(item.price ?? "")}${item.by_bot ? " · publicado por el bot" : ""}${item.in_groups ? " · también en grupos" : ""}</span></td>
+            <td>${escapeHtml(accountName(item.account))}</td>
+            <td><span class="status-tag status-${escapeHtml(item.status)}">${escapeHtml(LISTING_STATUS[item.status] || item.status)}</span></td>
+            <td>${escapeHtml(daysText(item.age_days))}<br><span class="muted">${escapeHtml(item.listed_on || "")}</span></td>
+            <td>${escapeHtml(item.clicks_14d ?? 0)}</td>
+            <td><span class="health-tag ${REC_TONE[rec] || "info"}">${escapeHtml(labels[rec] || rec)}</span><br><small class="muted">${escapeHtml(item.reason || "")}</small></td>
+            <td class="listing-actions">${button}</td>
+          </tr>`;
+        }).join("")}</tbody></table>`
+        : `<div class="review-empty">${items.length ? "Ningún anuncio con este filtro." : "Todavía no hay anuncios leídos. Pulsa \"Revisar ahora\" con las sesiones de Chrome abiertas."}</div>`;
+
+      document.querySelectorAll("[data-listing-action]").forEach(button => button.onclick = () => requestListingAction(button.dataset.listingKey, button.dataset.listingAction));
+      document.querySelectorAll("[data-listing-cancel]").forEach(button => button.onclick = async () => {
+        const result = await api("/api/listings/cancel", { method: "POST", body: JSON.stringify({ id: Number(button.dataset.listingCancel) }) });
+        listingsState = result.listings;
+        renderListings();
+      });
+
+      const covers = listingsState.covers || [];
+      const byFamily = {};
+      covers.forEach(cover => (byFamily[cover.family_key] ||= []).push(cover));
+      $("listingsCovers").innerHTML = covers.length ? Object.values(byFamily).map(group => {
+        const best = Math.max(...group.map(cover => cover.clicks_per_day));
+        const compared = group.length > 1;
+        return `<article class="cover-family">
+          <h4>${escapeHtml(group[0].family_label)}</h4>
+          <div class="cover-row">${group.map(cover => `<div class="cover-card ${compared && cover.clicks_per_day === best ? "cover-best" : ""}">
+            ${cover.image_url ? `<img src="${escapeHtml(cover.image_url)}" alt="Portada ${escapeHtml(cover.cover)}">` : `<div class="cover-missing">sin imagen</div>`}
+            <strong>${escapeHtml(cover.clicks_per_day)} clics/día</strong>
+            <span class="muted">${cover.listings} anuncio${cover.listings === 1 ? "" : "s"} · ${cover.clicks} clics · ${escapeHtml(cover.accounts.map(accountName).join(", "))}</span>
+            <small class="muted">${escapeHtml(cover.cover)}</small>
+          </div>`).join("")}</div>
+          ${compared ? "" : `<small class="muted">Todavía una sola portada: la comparación empieza con las próximas publicaciones.</small>`}
+        </article>`;
+      }).join("") : `<div class="review-empty">Todavía no hay anuncios del bot leídos para comparar portadas.</div>`;
+
+      const actions = listingsState.actions || [];
+      $("listingsActions").innerHTML = actions.length ? `<table>
+        <thead><tr><th>Pedida</th><th>Anuncio</th><th>Acción</th><th>Origen</th><th>Estado</th><th>Detalle</th></tr></thead>
+        <tbody>${actions.map(row => `<tr>
+          <td>${escapeHtml(shortDate(row.requested_at))}</td>
+          <td>${escapeHtml(row.title || "")}<br><span class="muted">${escapeHtml(accountName(row.account))}</span></td>
+          <td>${escapeHtml(labels[row.action] || row.action)}</td>
+          <td>${row.origin === "auto" ? "Automática" : "Aprobada por ti"}</td>
+          <td>${escapeHtml(ACTION_STATUS[row.status] || row.status)}</td>
+          <td class="muted">${escapeHtml(row.detail || "")}</td>
+        </tr>`).join("")}</tbody></table>` : `<div class="review-empty">Sin acciones todavía.</div>`;
+    }
+
+    async function requestListingAction(key, action) {
+      const item = (listingsState.listings || []).find(entry => entry.key === key);
+      const label = listingsState.labels?.[action] || action;
+      const warning = action === "delete" ? "\n\nEliminar no se puede deshacer." : action === "relist" ? "\n\nCuenta como una publicación nueva y respeta los límites de la cuenta." : "";
+      if (!confirm(`${label}: "${item?.title || ""}" (${accountName(item?.account)})?${warning}\n\nEl bot lo hará en su próxima vuelta, dentro de su horario.`)) return;
+      try {
+        const result = await api("/api/listings/action", { method: "POST", body: JSON.stringify({ key, action }) });
+        listingsState = result.listings;
+        renderListings();
+        toast(`${label} en cola`);
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
     function showTab(name) {
       document.querySelectorAll(".tab").forEach(tab => tab.classList.add("hidden"));
       document.querySelectorAll("nav button").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === name));
       $(name).classList.remove("hidden");
+      if (name === "listings") loadListings().catch(error => toast(error.message));
     }
 
     document.querySelectorAll("nav button").forEach(btn => btn.onclick = () => showTab(btn.dataset.tab));
     $("refreshBtn").onclick = loadState;
+    $("listingsScanBtn").onclick = async () => {
+      const result = await api("/api/listings/scan", { method: "POST", body: JSON.stringify({ account: $("listingsAccount").value }) });
+      listingsState = result.listings;
+      renderListings();
+      toast("Revisión pedida: el bot leerá los anuncios en su próxima vuelta (dentro de su horario).");
+    };
+    $("listingsAccount").addEventListener("change", renderListings);
+    $("listingsFilter").addEventListener("change", renderListings);
+    setInterval(() => {
+      if (!$("listings").classList.contains("hidden")) loadListings().catch(() => {});
+    }, 20000);
     $("saveBtn").onclick = saveConfig;
     $("autoGenerateBtn").onclick = () => generateAutonomyWeek().catch(error => toast(error.message));
     const markRulesDirty = () => {
@@ -1493,7 +1719,7 @@
         delay_minutes: 0,
         listing_mode: "grouped",
         source_excel: "ArticulosGenerados.xlsx",
-        images_root: "imagenes_firupost",
+        images_root: "imagenes_productos",
         title_contains: [],
       });
       setDirty();

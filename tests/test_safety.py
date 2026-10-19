@@ -152,6 +152,7 @@ def test_anuncio_normal_pasa_la_revision():
 
 
 def test_resumen_de_salud(store):
+    safety.save_safety(store, {"global_gap_minutes": 0})
     publicar(store, "cuenta1", datetime.now() - timedelta(minutes=5))
     safety.pause_account(store, "cuenta2", 2, "prueba")
     resumen = safety.health_snapshot(store, ["cuenta1", "cuenta2", "cuenta3"])

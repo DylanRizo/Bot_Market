@@ -233,3 +233,25 @@ def test_convierte_heic_a_jpeg():
     with Image.open(io.BytesIO(jpeg)) as image:
         assert image.format == "JPEG"
         assert image.size == (64, 64)
+
+
+@pytest.mark.parametrize(
+    "name, group, number",
+    [
+        ("TOP-NEG-M", "TOP-NEG", 1),
+        ("TOP-NEG-M (2)", "TOP-NEG", 2),
+        ("SHYLA-NEG-S_3.jpg", "SHYLA-NEG", 3),
+        ("CML-AZU-S", "CML-AZU", 1),
+        ("SHYLA-BEG-S", "SHYLA-BEI", 1),
+    ],
+)
+def test_acepta_nombres_simples_con_solo_el_codigo(name, group, number):
+    photo = parse_photo(drive_file(name))
+    assert photo is not None
+    assert (photo.group, photo.number, photo.extension) == (group, number, "jpg")
+
+
+@pytest.mark.parametrize("name", ["PHOTO-2026-08-06-08-20-54.jpg", "IMG_8827.JPG", "TOP-VAR", "CMP-NEG-M.mov"])
+def test_nombres_simples_que_no_son_foto_de_producto(name):
+    mime = "video/quicktime" if name.endswith(".mov") else "image/jpeg"
+    assert parse_photo(drive_file(name, mime=mime)) is None

@@ -25,7 +25,9 @@ import pandas as pd
 
 from marketplace_catalog import ASSISTANT_PRESETS, STYLE_TO_MODE
 from marketplace_custom_products import CUSTOM_ROOT, create_custom_product
-from marketplace_runtime import process_exists
+import marketplace_listings as listings_module
+from marketplace_listing_worker import request_scan, scan_state_key
+from marketplace_runtime import IMAGES_DIR_NAME, images_root, process_exists
 from marketplace_safety import (
     LEVELS as SAFETY_LEVELS,
     backfill_events,
@@ -36,6 +38,7 @@ from marketplace_safety import (
     save_safety,
 )
 from marketplace_scheduler import (
+    apply_photo_order,
     approve_items,
     cancel_future,
     catalog_families,
@@ -67,7 +70,7 @@ ACCOUNTS_PATH = SCRATCH_DIR / "marketplace_accounts.json"
 CAMPAIGN_PATH = SCRATCH_DIR / "marketplace_campaign_example.json"
 ACTIVITY_PATH = SCRATCH_DIR / "marketplace_activity.json"
 INVENTORY_PATH = SCRATCH_DIR / "ArticulosGenerados.xlsx"
-IMAGES_ROOT = SCRATCH_DIR / "imagenes_firupost"
+IMAGES_ROOT = images_root(SCRATCH_DIR)
 CAMPAIGN_UPLOADS_ROOT = SCRATCH_DIR / "marketplace_campaign_uploads"
 RUNNER_PATH = SCRATCH_DIR / "marketplace_campaign_runner.py"
 OPEN_SESSION_SCRIPT = SCRATCH_DIR / "abrir_sesion_marketplace_cuenta.ps1"
@@ -250,12 +253,30 @@ def autonomy_payload() -> dict[str, Any]:
             if descriptors:
                 photo_assignments[account][family] = descriptors
     account_keys = list(json_load(ACCOUNTS_PATH, {"accounts": {}}).get("accounts", {}))
+    queue = STORE.list_queue(limit=500)
+    # Portada prevista de cada publicacion pendiente, en el orden en que saldran.
+    safety = load_safety(STORE)
+    upcoming: dict[str, int] = {}
+    for item in sorted(queue, key=lambda entry: entry["scheduled_at"]):
+        if item["status"] not in {"planned", "queued", "retry"}:
+            continue
+        family = str(item.get("family_key") or "")
+        paths = (item["job"].get("listing_overrides") or {}).get("image_paths") or item["job"].get("image_paths") or []
+        if not paths:
+            continue
+        ordered, mode = apply_photo_order(STORE, config, safety, item["account"], family, list(paths), upcoming.get(family, 0))
+        if mode == "auto":
+            upcoming[family] = upcoming.get(family, 0) + 1
+        try:
+            item["cover"] = {**media_descriptor(Path(ordered[0])), "mode": mode}
+        except (ValueError, FileNotFoundError, OSError):
+            item["cover"] = None
     return {
         "config": config,
         "safety": load_safety(STORE),
         "safety_levels": SAFETY_LEVELS,
         "health": health_snapshot(STORE, account_keys),
-        "queue": STORE.list_queue(limit=500),
+        "queue": queue,
         "summary": STORE.summary(),
         "report": STORE.report(7),
         "alerts": STORE.list_alerts(),
@@ -264,6 +285,35 @@ def autonomy_payload() -> dict[str, Any]:
         "custom_products": custom_products,
         "photo_assignments": photo_assignments,
         "sgi": sgi_status(),
+    }
+
+
+def listings_payload() -> dict[str, Any]:
+    accounts = json_load(ACCOUNTS_PATH, {"accounts": {}}).get("accounts", {})
+    today = datetime.now().date()
+    items = listings_module.list_listings(STORE)
+    for item in items:
+        item["age_days"] = listings_module.age_days(item["listed_on"], today)
+        item["executable"] = item["recommendation"] in listings_module.EXECUTABLE_ACTIONS
+    pending = {row["key"]: row for row in listings_module.pending_actions(STORE)}
+    for item in items:
+        row = pending.get(item["key"])
+        item["pending_action"] = {"id": row["id"], "action": row["action"], "detail": row["detail"]} if row else None
+    covers = listings_module.cover_report(STORE)
+    labels = {key: preset["label"] for key, preset in ASSISTANT_PRESETS.items()}
+    for cover in covers:
+        cover["family_label"] = labels.get(cover["family_key"], cover["family_key"])
+        try:
+            cover["image_url"] = media_descriptor(Path(cover["cover_path"]))["url"]
+        except (ValueError, FileNotFoundError, OSError):
+            cover["image_url"] = ""
+    return {
+        "listings": items,
+        "covers": covers,
+        "actions": listings_module.recent_actions(STORE, 40),
+        "scans": {key: STORE.worker_state(scan_state_key(key)) for key in accounts},
+        "labels": listings_module.ACTION_LABELS,
+        "rules": listings_module.RULES,
     }
 
 
@@ -588,7 +638,7 @@ def build_assistant_campaign(payload: dict[str, Any]) -> dict[str, Any]:
             "account": account,
             "listing_mode": mode,
             "source_excel": "ArticulosGenerados.xlsx",
-            "images_root": "imagenes_firupost",
+            "images_root": IMAGES_DIR_NAME,
         }
         if group_by:
             job["group_by"] = group_by
@@ -913,6 +963,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if self.path == "/api/activity":
                 self.send_json({"ok": True, "activity": json_load(ACTIVITY_PATH, {"items": []})})
                 return
+            if self.path == "/api/listings":
+                self.send_json({"ok": True, "listings": listings_payload()})
+                return
             if self.path == "/api/autonomy":
                 self.send_json({"ok": True, "autonomy": autonomy_payload()})
                 return
@@ -990,7 +1043,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         config = save_autonomy_config(STORE, raw_config)
         if config["enabled"]:
             if config["mode"] == "autonomous":
-                approve_items(STORE)
+                approve_items(STORE, include_reuse=False)
             start_worker()
         self.send_json({"ok": True, "autonomy": autonomy_payload()})
 
@@ -1086,6 +1139,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
         for alert in STORE.list_alerts(limit=500):
             STORE.resolve_alert(alert["id"])
         self.send_json({"ok": True, "autonomy": autonomy_payload()})
+
+    def _post_listings_action(self) -> None:
+        """POST /api/listings/action"""
+        payload = self.read_json()
+        listings_module.queue_action(STORE, str(payload.get("key") or ""), str(payload.get("action") or ""))
+        self.send_json({"ok": True, "listings": listings_payload()})
+
+    def _post_listings_cancel(self) -> None:
+        """POST /api/listings/cancel"""
+        payload = self.read_json()
+        with STORE.connect() as connection:
+            connection.execute(
+                "UPDATE listing_actions SET status='cancelled', finished_at=? WHERE id=? AND status='pending'",
+                (now_text(), int(payload.get("id") or 0)),
+            )
+        self.send_json({"ok": True, "listings": listings_payload()})
+
+    def _post_listings_scan(self) -> None:
+        """POST /api/listings/scan"""
+        payload = self.read_json()
+        request_scan(STORE, str(payload.get("account") or ""))
+        if load_autonomy_config(STORE)["enabled"]:
+            start_worker()
+        self.send_json({"ok": True, "listings": listings_payload()})
 
     def _post_autonomy_worker_start(self) -> None:
         """POST /api/autonomy/worker/start"""
@@ -1263,6 +1340,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         "/api/autonomy/alert/resolve": _post_autonomy_alert_resolve,
         "/api/autonomy/alert/resolve-all": _post_autonomy_alert_resolve_all,
         "/api/safety/config": _post_safety_config,
+        "/api/listings/action": _post_listings_action,
+        "/api/listings/cancel": _post_listings_cancel,
+        "/api/listings/scan": _post_listings_scan,
         "/api/safety/pause": _post_safety_pause,
         "/api/safety/resume": _post_safety_resume,
         "/api/autonomy/worker/start": _post_autonomy_worker_start,
@@ -1310,7 +1390,7 @@ def main() -> None:
     server = SingleDashboardServer((args.host, args.port), DashboardHandler)
     token = issue_session_token()
     url = f"http://{args.host}:{args.port}/?token={token}"
-    print(f"Marketplace Bot Dashboard: {url}", flush=True)
+    print(f"Bot Marketplace La Comarca: {url}", flush=True)
     print(f"Token de la sesion guardado en: {DASHBOARD_TOKEN_PATH}", flush=True)
     if not args.no_open:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()

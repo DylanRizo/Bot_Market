@@ -31,6 +31,17 @@ MAX_PHOTOS_PER_GROUP = 10
 TITLE_PATTERN = re.compile(
     r"^(?P<code>[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+) - (?P<description>.+?) - (?P<number>\d{1,3})\.(?P<extension>[A-Za-z0-9]+)$"
 )
+# Nombre simple, como lo sube marketing desde el telefono: "TOP-NEG-M",
+# "TOP-NEG-M (2)", "TOP-NEG-M_3.jpg". Familia de letras y 1 o 2 partes mas, para
+# no confundir "PHOTO-2026-08-06-08-20-54.jpg" ni "IMG_8827.JPG" con un producto.
+SIMPLE_TITLE_PATTERN = re.compile(
+    r"^(?P<code>[A-Za-z]{2,6}(?:-[A-Za-z0-9]{1,6}){1,2})"
+    r"(?:\s*\((?P<paren>\d{1,3})\)|_(?P<under>\d{1,3}))?"
+    r"(?:\.(?P<extension>[A-Za-z0-9]+))?$"
+)
+MIME_EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}
+# Abreviaturas de color que marketing usa distinto al SGI.
+COLOR_ALIASES = {"BEG": "BEI"}
 FOLDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{10,}$")
 SIZE_TOKENS = {"XS", "S", "M", "L", "XL", "2XL", "XXL", "3XL", "U", "UNI", "X"}
 EXCLUDED_DESCRIPTION_WORDS = ("inventario", "empaque")
@@ -70,12 +81,40 @@ class DrivePhoto:
     promotional: bool = False
 
 
+def normalize_code(code: str) -> str:
+    parts = code.upper().split("-")
+    return "-".join([parts[0], *[COLOR_ALIASES.get(part, part) for part in parts[1:]]])
+
+
+def parse_simple_photo(file: dict[str, Any], title: str) -> DrivePhoto | None:
+    """Foto nombrada solo con el codigo del SGI (sin descripcion ni numero)."""
+    match = SIMPLE_TITLE_PATTERN.match(title)
+    mime = str(file.get("mimeType") or "").lower()
+    if not match or not mime.startswith("image/"):
+        return None
+    extension = (match["extension"] or MIME_EXTENSIONS.get(mime, "")).lower()
+    md5 = str(file.get("md5Checksum") or "")
+    code = normalize_code(match["code"])
+    if not extension or extension not in IMAGE_EXTENSIONS or not md5 or not file.get("id"):
+        return None
+    if code in EXCLUDED_CODES or code.endswith("-VAR"):
+        return None
+    return DrivePhoto(
+        file_id=str(file["id"]),
+        title=title,
+        group=product_group(code),
+        number=int(match["paren"] or match["under"] or 1),
+        extension=extension,
+        md5=md5,
+    )
+
+
 def parse_photo(file: dict[str, Any]) -> DrivePhoto | None:
     title = str(file.get("name") or "").strip()
     match = TITLE_PATTERN.match(title)
     if not match:
-        return None
-    code = match["code"].upper()
+        return parse_simple_photo(file, title)
+    code = normalize_code(match["code"])
     extension = match["extension"].lower()
     if code in EXCLUDED_CODES or code.endswith("-VAR") or extension not in IMAGE_EXTENSIONS:
         return None
@@ -143,6 +182,22 @@ class _CaptureBrowser(webbrowser.BaseBrowser):
     def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool:
         self._deliver(url)
         return True
+
+
+def cached_photo_path(photo: DrivePhoto, cache_dir: Path = CACHE_DIR) -> Path:
+    """Donde queda guardada una foto descargada: el nombre es su huella de contenido."""
+    target_extension = "jpg" if photo.extension in HEIF_EXTENSIONS | {"jpeg"} else photo.extension
+    return cache_dir / f"{photo.md5}.{target_extension}"
+
+
+def offline_download(cache_dir: Path = CACHE_DIR) -> Callable[[DrivePhoto], Path | None]:
+    """Descarga sin conexion: devuelve la foto si ya se bajo antes, o None."""
+
+    def download(photo: DrivePhoto) -> Path | None:
+        target = cached_photo_path(photo, cache_dir)
+        return target if target.is_file() and target.stat().st_size > 0 else None
+
+    return download
 
 
 class DriveLibrary:
@@ -240,8 +295,7 @@ class DriveLibrary:
     def download(self, photo: DrivePhoto) -> Path:
         """Descarga una sola vez por contenido. HEIC se convierte a JPG, que es lo
         que Marketplace acepta de forma fiable."""
-        target_extension = "jpg" if photo.extension in HEIF_EXTENSIONS | {"jpeg"} else photo.extension
-        target = self._cache_dir / f"{photo.md5}.{target_extension}"
+        target = cached_photo_path(photo, self._cache_dir)
         if target.is_file() and target.stat().st_size > 0:
             return target
         from googleapiclient.http import MediaIoBaseDownload

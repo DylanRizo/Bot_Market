@@ -253,3 +253,11 @@ def test_publicada_limpia_el_detalle_del_fallo_anterior(store, worker_env):
     store.update_queue_item(queue_id, detail="Fallo el job 0: algo")
     store.mark_published(queue_id)
     assert store.get_queue_item(queue_id)["detail"] == "Publicada en Marketplace."
+
+
+def test_el_trabajador_deja_su_numero_de_proceso(tmp_path):
+    import os
+
+    archivo = tmp_path / "worker.pid"
+    worker.register_pid(archivo)
+    assert archivo.read_text(encoding="utf-8") == str(os.getpid())

@@ -7,10 +7,12 @@ from typing import Any
 
 import pandas as pd
 
+from marketplace_runtime import IMAGES_DIR_NAME, images_root
+
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 INVENTORY_PATH = SCRATCH_DIR / "ArticulosGenerados.xlsx"
-IMAGES_ROOT = SCRATCH_DIR / "imagenes_firupost"
+IMAGES_ROOT = images_root(SCRATCH_DIR)
 
 CLOTHING = "Men's clothing & shoes"
 WOMEN = "Women's clothing & shoes"
@@ -36,11 +38,16 @@ ASSISTANT_PRESETS: dict[str, dict[str, Any]] = {
     "munequeras": {"label": "Munequeras deportivas", "sku_prefixes": ["MUN-"], "category": SPORTS},
     "straps": {"label": "Straps para gimnasio", "sku_prefixes": ["STR-"], "category": SPORTS},
     "compression_long": {"label": "Camisas manga larga de compresion", "sku_prefixes": ["CML-"], "category": CLOTHING},
-    "bershka": {"label": "Camisas Bershka", "sku_prefixes": ["BSH-", "BSK-"], "category": CLOTHING},
+    # La clave interna sigue siendo "bershka" porque el historial cuelga de ella;
+    # el producto es la marca Bersek.
+    "bershka": {"label": "Camisas Bersek", "sku_prefixes": ["BSH-", "BSK-"], "category": CLOTHING},
     "chalecos": {"label": "Chalecos de lana sin mangas", "sku_prefixes": ["CHA-"], "category": CLOTHING},
     "tops": {"label": "Tops deportivos", "sku_prefixes": ["TOP-"], "category": WOMEN},
     "joggers": {"label": "Pantalones jogger", "sku_prefixes": ["JOG-"], "category": CLOTHING},
-    "calcetas": {"label": "Calcetas de compresion", "sku_prefixes": ["CAL-"], "category": CLOTHING},
+    # CAL-15BEI / CAL-30NEG llevan el nivel de compresion; CAL-MUL son calcetas
+    # comunes (C$60) y no deben salir en el mismo anuncio que las de compresion.
+    "calcetas": {"label": "Calcetas de compresion", "sku_prefixes": ["CAL-15", "CAL-30"], "category": CLOTHING},
+    "calcetas_multicolor": {"label": "Calcetas multicolor", "sku_prefixes": ["CAL-MUL"], "category": CLOTHING},
     "mochilas": {"label": "Mochilas antirrobo", "sku_prefixes": ["MOC-"], "category": BAGS},
     "rodilleras": {"label": "Rodilleras deportivas", "sku_prefixes": ["ROD-"], "category": SPORTS},
     "cinturones": {"label": "Cinturones de gimnasio", "sku_prefixes": ["CIN-"], "category": SPORTS},
@@ -237,7 +244,7 @@ def build_family_jobs(
             "account": account,
             "listing_mode": mode,
             "source_excel": "ArticulosGenerados.xlsx",
-            "images_root": "imagenes_firupost",
+            "images_root": IMAGES_DIR_NAME,
             "category": preset.get("category") or "Men's clothing & shoes",
         }
         if group_by:

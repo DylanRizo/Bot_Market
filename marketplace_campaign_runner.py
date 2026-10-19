@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from marketplace_runtime import AccountLock
+from marketplace_runtime import AccountLock, alias_images_path
 
 
 def safety_store():
@@ -118,7 +118,7 @@ def expand_path(value: str | None, base_dir: Path) -> Path | None:
     path = Path(expanded)
     if not path.is_absolute():
         path = base_dir / path
-    return path
+    return alias_images_path(path)
 
 
 def bool_arg(args: list[str], enabled: bool, flag: str) -> None:
@@ -205,11 +205,15 @@ def build_dynamic_jobs(
     if tags:
         command.extend(["--tags-json", json.dumps(tags, ensure_ascii=False)])
     account_key = str(job.get("account") or default_account or "")
+    family_key = str(job.get("family_key") or "")
+    if family_key:
+        command.extend(["--family-key", family_key])
     if vary_copy and account_key:
-        # Misma cuenta y misma semana dan el mismo texto; otra cuenta u otra
-        # semana, otra redaccion. Asi dos cuentas no suben anuncios identicos.
-        week = datetime.now().isocalendar()
-        command.extend(["--variant-seed", f"{account_key}|{week[0]}-W{week[1]:02d}"])
+        # Cada publicacion (cuenta, familia, dia y trabajo del calendario) tiene su
+        # propia redaccion; ademas el constructor la compara con lo ya publicado.
+        publication = Path(str(job.get("intent_file") or "")).stem or str(job.get("name", ""))
+        seed = f"{account_key}|{family_key}|{datetime.now():%Y-%m-%d}|{publication}"
+        command.extend(["--variant-seed", seed])
     ai_enabled = bool(job.get("ai_descriptions", defaults.get("ai_descriptions", False)))
     if ai_enabled:
         command.append("--ai-descriptions")

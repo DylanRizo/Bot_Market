@@ -45,6 +45,7 @@
       border-radius: 7px;
       background: #1877f2;
       color: #fff;
+      font-size: 13px;
       font-weight: 800;
     }
     h2 { font-size: 15px; margin: 0 0 10px; }
@@ -719,3 +720,49 @@
       .safety-grid, .field-pair { grid-template-columns: 1fr; }
       .segmented { flex-wrap: wrap; }
     }
+
+    /* --- Anuncios publicados ------------------------------------------------ */
+    .scan-strip { display: flex; flex-wrap: wrap; gap: 8px; margin: -6px 0 18px; }
+    .scan-chip { font-size: 12px; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
+    .scan-chip b { color: var(--text); }
+    .listings-filters { flex-wrap: nowrap; }
+    .listings-filters select { width: auto; min-width: 170px; }
+    .listings-table td { vertical-align: top; }
+    .listings-table td small { display: inline-block; max-width: 340px; line-height: 1.35; margin-top: 3px; }
+    .listing-actions { white-space: nowrap; }
+    .listing-actions button { min-height: 30px; font-size: 12px; }
+    .health-tag.warn { background: var(--yellow-soft); color: var(--yellow); }
+    .health-tag.muted { background: #eef1f4; color: var(--muted); }
+    .status-tag.status-in_stock { background: var(--green-soft); color: var(--green); }
+    .status-tag.status-out_of_stock { background: var(--yellow-soft); color: var(--yellow); }
+    .status-tag.status-sold { background: var(--blue-soft); color: var(--blue-dark); }
+    @media (max-width: 620px) {
+      .listings-table th:nth-child(2), .listings-table td:nth-child(2) { display: none; }
+      .listing-actions { white-space: normal; }
+    }
+
+    /* --- Prueba de portadas --------------------------------------------------- */
+    .cover-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
+    .cover-family { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: #fff; }
+    .cover-family h4 { margin: 0 0 10px; font-size: 14px; }
+    .cover-row { display: flex; flex-wrap: wrap; gap: 12px; }
+    .cover-card { width: 170px; display: grid; gap: 4px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+    .cover-card img, .cover-missing { width: 100%; height: 130px; object-fit: cover; border-radius: 6px; background: #f3f5f7; }
+    .cover-missing { display: grid; place-items: center; color: var(--muted); }
+    .cover-best { border-color: var(--green); box-shadow: 0 0 0 2px var(--green-soft); }
+
+    /* --- Orden de fotos por cuenta ------------------------------------------- */
+    .photo-order { margin-top: 10px; display: grid; gap: 6px; }
+    .order-toggle { font-size: 12px; }
+    .order-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+    .order-item { width: 74px; display: grid; gap: 3px; justify-items: center; font-size: 11px; color: var(--muted); }
+    .order-item img { width: 74px; height: 74px; object-fit: cover; border-radius: 6px; border: 2px solid transparent; }
+    .order-cover img { border-color: var(--blue); }
+    .order-cover span { color: var(--blue-dark); font-weight: 700; }
+    .order-buttons { display: flex; gap: 3px; }
+    .order-buttons button { min-height: 22px; padding: 0 6px; font-size: 12px; }
+    .calendar-cover { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+    .calendar-cover img { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; }
+    .calendar-cover small { color: var(--muted); font-size: 10px; }
+    .calendar-reuse { display: block; margin-top: 4px; padding: 5px 6px; border-radius: 4px; background: var(--yellow-soft); color: var(--yellow); line-height: 1.35; font-weight: 600; }
+

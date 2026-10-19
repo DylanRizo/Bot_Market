@@ -1,4 +1,4 @@
-# Guia para socios: Marketplace Bot
+# Guia para socios: Bot Marketplace La Comarca
 
 ## 1. Modelo recomendado: una instalacion privada por socio
 

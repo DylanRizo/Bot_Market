@@ -1,4 +1,4 @@
-# Bot de Facebook Marketplace
+# Bot Marketplace La Comarca
 
 Publica anuncios en Facebook Marketplace de forma programada: elige los
 productos, arma el calendario de la semana, rellena el formulario en el

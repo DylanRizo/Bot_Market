@@ -190,7 +190,7 @@ def test_el_frontend_no_llama_a_ninguna_ruta_inexistente(panel):
     _, _, dashboard = panel
     post = set(dashboard.DashboardHandler.POST_ROUTES)
     get = {"/api/state", "/api/activity", "/api/autonomy", "/api/run/status",
-           "/api/image", "/api/media", "/api/assistant/review"}
+           "/api/image", "/api/media", "/api/assistant/review", "/api/listings"}
     conocidas = post | get
     desconocidas = sorted(r for r in rutas_que_llama_el_frontend() if r not in conocidas)
     assert not desconocidas, f"el frontend llama a rutas que el servidor no tiene: {desconocidas}"

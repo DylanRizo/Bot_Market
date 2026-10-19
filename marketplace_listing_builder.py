@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -12,12 +12,15 @@ import pandas as pd
 from PIL import Image
 
 from marketplace_ai_descriptions import DEFAULT_MODEL, DEFAULT_TONE, generate_product_tags, generate_sales_description, sanitize_tags
+from marketplace_copy import Copy, build_copy, similarity
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 SIZE_ORDER = ["XS", "S", "M", "L", "XL", "XXL", "UNI", "X"]
 SIZE_SET = set(SIZE_ORDER)
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+# Lo publicado en estas semanas (cualquier cuenta) no se vuelve a redactar igual.
+COPY_HISTORY_DAYS = 45
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -101,68 +104,28 @@ def join_human(values: list[str]) -> str:
     return ", ".join(values[:-1]) + f" y {values[-1]}"
 
 
-def pick_variant(seed: str, options: list[str], salt: str = "") -> str:
-    """Elige una opcion estable para la semilla (cuenta y semana).
+def recent_copies(days: int = COPY_HISTORY_DAYS) -> list[dict[str, str]]:
+    """Textos ya publicados y titulos en Facebook; sin base de datos, ninguno."""
+    try:
+        from marketplace_storage import MarketplaceStore, default_db_path
 
-    Sin semilla devuelve siempre la primera: los anuncios manuales no cambian.
-    """
-    if not seed or len(options) == 1:
-        return options[0]
-    digest = hashlib.sha256(f"{seed}|{salt}".encode("utf-8")).digest()
-    return options[digest[0] % len(options)]
-
-
-CLOSING_LINES = [
-    "Escribeme para confirmar {what} y coordinar la entrega.",
-    "Mandame mensaje con {what} y te confirmo disponibilidad.",
-    "Consulta disponibilidad de {what} por mensaje; coordinamos la entrega.",
-]
+        path = default_db_path()
+        if not Path(path).is_file():
+            return []
+        since = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+        return MarketplaceStore(path).recent_copies(since)
+    except Exception:  # noqa: BLE001 - sin historial se redacta igual, solo sin comparar
+        return []
 
 
-def closing_line(what: str, seed: str = "") -> str:
-    return pick_variant(seed, CLOSING_LINES, "cierre").format(what=what)
-
-
-def listing_intro(base: str, seed: str = "") -> str:
-    intro = _listing_intro(base)
-    if not seed:
-        return intro
-    return pick_variant(
-        seed,
-        [intro, f"{intro} Producto nuevo, listo para entrega.", f"Disponible: {base.lower()}. {intro}"],
-        "intro",
-    )
-
-
-def _listing_intro(base: str) -> str:
-    lower = base.lower()
-    if "muñequera" in lower or "munequera" in lower:
-        return "Muñequeras deportivas ideales para entrenar con mayor comodidad y soporte en rutinas de fuerza o gimnasio."
-    if "strap" in lower:
-        return "Straps para gimnasio ideales para mejorar el agarre en rutinas de espalda, peso muerto y remos."
-    if "bolso" in lower:
-        return f"{base} practico para llevar ropa, calzado y accesorios al gimnasio o a tus actividades diarias."
-    if "durag" in lower:
-        return f"{base} versatil para completar tu estilo y proteger el cabello durante el uso diario."
-    if "enterizo" in lower:
-        return f"{base} con estilo deportivo, ideal para entrenar o crear un outfit casual."
-    if "short" in lower:
-        return f"{base} comodos y versatiles para entrenar o usar en un look casual."
-    if "leggin" in lower:
-        return f"{base} con estilo deportivo y corte favorecedor."
-    if "sin mangas" in lower:
-        return f"{base} nueva, comoda para entrenar con libertad de movimiento."
-    if "camisa de compresion" in lower or "compresión" in lower:
-        return f"{base} nueva, perfecta para entrenar, usar bajo otra prenda o armar un outfit deportivo."
-    if "falda" in lower:
-        return f"{base} nueva, comoda para entrenar o armar un look deportivo."
-    if "top" in lower.split():
-        return f"{base} nuevo, con buen soporte para entrenar y combinar con leggins o shorts."
-    if any(word in lower for word in ("calcetas", "rodilleras")):
-        return f"{base} nuevas, ideales para entrenar o para uso diario."
-    if any(word in lower for word in ("camisa", "calceta", "manga para brazo", "mochila", "rodillera")):
-        return f"{base} nueva, ideal para entrenar o para uso diario."
-    return f"{base} nuevo, ideal para uso diario o para completar tu estilo."
+def ai_hints(copy: Copy, recent: list[dict[str, str]]) -> dict[str, Any]:
+    """Para la IA: los textos mas parecidos ya publicados, para que no los repita."""
+    similar = sorted(
+        (other for other in recent if other.get("description")),
+        key=lambda other: similarity(copy, other),
+        reverse=True,
+    )[:3]
+    return {"evitar": [other["description"] for other in similar]} if similar else {}
 
 
 def _image_candidates(folder_path: Path, image_name: str) -> list[Path]:
@@ -288,26 +251,62 @@ def select_rows(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
     return selected
 
 
-def public_description_for_single(row: pd.Series, seed: str = "") -> str:
-    title = text_value(row.get("Titulo"))
-    parsed = parse_title(title)
-    price = price_number(row.get("Precio"))
-    location = text_value(row.get("Ubicacion")) or "Managua, Nicaragua"
-    lines = [
-        listing_intro(title, seed),
-    ]
-    if parsed["size"]:
-        lines.append(f"Talla: {parsed['size']}.")
-    if parsed["color"] and parsed["color"].lower() not in title.lower().split(" - ")[0].lower():
-        lines.append(f"Color: {parsed['color']}.")
-    lines.extend(
-        [
-            f"Precio: {price_text(price)}.",
-            f"Ubicacion: {location}.",
-            closing_line("disponibilidad", seed),
-        ]
+def row_copy(row: pd.Series, *, family: str, seed: str, recent: list[dict[str, str]]) -> Copy:
+    parsed = parse_title(text_value(row.get("Titulo")))
+    return build_copy(
+        parsed["base"] or text_value(row.get("Titulo")),
+        [parsed["color"]],
+        [parsed["size"]],
+        [price_number(row.get("Precio"))],
+        text_value(row.get("Ubicacion")) or "Managua, Nicaragua",
+        price_text=price_text,
+        family=family,
+        seed=seed,
+        recent=recent,
     )
-    return "\n".join(line for line in lines if line)
+
+
+def group_copy(rows: pd.DataFrame, *, family: str, seed: str, recent: list[dict[str, str]], fallback_name: str) -> Copy:
+    parsed_rows = [parse_title(text_value(row.get("Titulo"))) for _, row in rows.iterrows()]
+    bases = [parsed["base"] for parsed in parsed_rows if parsed["base"]]
+    return build_copy(
+        bases[0] if bases else fallback_name,
+        [parsed["color"] for parsed in parsed_rows],
+        [parsed["size"] for parsed in parsed_rows],
+        [price_number(row.get("Precio")) for _, row in rows.iterrows()],
+        text_value(rows.iloc[0].get("Ubicacion")) or "Managua, Nicaragua",
+        price_text=price_text,
+        family=family,
+        seed=seed,
+        recent=recent,
+    )
+
+
+def finish_listing(
+    copy: Copy,
+    facts: dict[str, Any],
+    recent: list[dict[str, str]],
+    *,
+    ai_enabled: bool,
+    ai_model: str,
+    ai_tone: str,
+) -> tuple[str, list[str], str]:
+    """Descripcion y etiquetas finales: las de la IA si esta activa, si no las variadas."""
+    facts = {"titulo": copy.title, **facts}
+    description, source = generate_sales_description(
+        {**facts, **ai_hints(copy, recent)} if ai_enabled else facts,
+        copy.description,
+        enabled=ai_enabled,
+        model=ai_model,
+        tone=ai_tone,
+    )
+    tags, _ = generate_product_tags(
+        {key: value for key, value in facts.items() if key not in ("precio", "ubicacion", "condicion")},
+        enabled=ai_enabled,
+        model=ai_model,
+        fallback=copy.tags,
+    )
+    return description, tags, source
 
 
 def row_to_public_listing(
@@ -320,40 +319,26 @@ def row_to_public_listing(
     ai_model: str,
     ai_tone: str,
     seed: str = "",
+    family: str = "",
+    recent: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], str]:
+    recent = recent or []
     folder, images = validate_images(images_root, text_value(row.get("CarpetaImg")), text_value(row.get("NombreImg")) or "foto_1")
-    title = text_value(row.get("Titulo"))
-    parsed = parse_title(title)
+    parsed = parse_title(text_value(row.get("Titulo")))
     price = price_number(row.get("Precio"))
     location = text_value(row.get("Ubicacion")) or "Managua, Nicaragua"
-    fallback = public_description_for_single(row, seed)
-    description, source = generate_sales_description(
-        {
-            "titulo": title,
-            "precio": price_text(price),
-            "color": parsed["color"],
-            "talla": parsed["size"],
-            "ubicacion": location,
-            "condicion": condition,
-        },
-        fallback,
-        enabled=ai_enabled,
-        model=ai_model,
-        tone=ai_tone,
-    )
-    tags, _ = generate_product_tags(
-        {
-            "titulo": title,
-            "categoria": category,
-            "color": parsed["color"],
-            "talla": parsed["size"],
-            "uso": "entrenamiento y uso diario",
-        },
-        enabled=ai_enabled,
-        model=ai_model,
+    copy = row_copy(row, family=family, seed=seed, recent=recent)
+    description, tags, source = finish_listing(
+        copy,
+        {"precio": price_text(price), "color": parsed["color"], "talla": parsed["size"], "ubicacion": location,
+         "condicion": condition, "categoria": category},
+        recent,
+        ai_enabled=ai_enabled,
+        ai_model=ai_model,
+        ai_tone=ai_tone,
     )
     listing = {
-        "Titulo": text_value(row.get("Titulo")),
+        "Titulo": copy.title,
         "Precio": price,
         "Categoria": category,
         "Condicion": condition,
@@ -376,81 +361,21 @@ def group_key(row: pd.Series, mode: str) -> tuple[str, str]:
     return ("grouped", "all")
 
 
-def grouped_title(rows: pd.DataFrame, mode: str, fallback_name: str, seed: str = "") -> str:
-    parsed_rows = [parse_title(text_value(row.get("Titulo"))) for _, row in rows.iterrows()]
-    bases = [parsed["base"] for parsed in parsed_rows if parsed["base"]]
-    base = bases[0] if bases else fallback_name
-    colors = join_human([parsed["color"] for parsed in parsed_rows])
-    sizes = ", ".join(sort_sizes([parsed["size"] for parsed in parsed_rows]))
-
-    if mode == "grouped_by_color" and colors:
-        return f"{base} - {colors}" + (f" ({sizes})" if sizes else "")
-    if mode == "grouped_by_size" and sizes:
-        return f"{base} - Talla {sizes}" + (f" ({colors})" if colors else "")
-    if seed and colors and sizes:
-        size_list = sort_sizes([parsed["size"] for parsed in parsed_rows])
-        size_range = f"{size_list[0]} a {size_list[-1]}" if len(size_list) > 1 else size_list[0]
-        return pick_variant(
-            seed,
-            [
-                f"{base} - {colors} ({sizes})",
-                f"{base} | Tallas {size_range} | {colors}",
-                f"{base} en {colors} - Tallas {sizes}",
-            ],
-            "titulo",
-        )
-    pieces = []
-    if colors:
-        pieces.append(colors)
-    if sizes:
-        pieces.append(f"({sizes})")
-    return f"{base} - {' '.join(pieces)}".strip(" -") if pieces else fallback_name
-
-
-def grouped_description(rows: pd.DataFrame, title: str, seed: str = "") -> str:
-    parsed_rows = [parse_title(text_value(row.get("Titulo"))) for _, row in rows.iterrows()]
-    colors = join_human([parsed["color"] for parsed in parsed_rows])
-    sizes = ", ".join(sort_sizes([parsed["size"] for parsed in parsed_rows]))
-    prices = [price_number(row.get("Precio")) for _, row in rows.iterrows() if price_number(row.get("Precio"))]
-    unique_prices = sorted(set(prices))
-    location = text_value(rows.iloc[0].get("Ubicacion")) or "Managua, Nicaragua"
-    # Los titulos variados separan con "|" o " en " en lugar de " - ".
-    base = re.split(r" \| | en (?=[A-Z])", parse_title(title)["base"] or title)[0].strip() or title
-
-    if len(unique_prices) <= 1:
-        price_line = f"Precio: {price_text(unique_prices[0] if unique_prices else 0)} cada uno."
-    else:
-        price_line = f"Precio desde {price_text(unique_prices[0])}, segun variante."
-
-    lines = [
-        listing_intro(base, seed),
-    ]
-    if colors:
-        lines.append(f"Colores disponibles: {colors}.")
-    if sizes:
-        lines.append(f"Tallas disponibles: {sizes}.")
-    lines.extend(
-        [
-            price_line,
-            f"Ubicacion: {location}.",
-            closing_line(" y ".join(value for value in ["color" if colors else "", "talla" if sizes else ""] if value) or "la variante", seed),
-        ]
-    )
-    return "\n".join(line for line in lines if line)
-
-
 def group_to_public_listing(
     rows: pd.DataFrame,
     images_root: Path,
     category: str,
     condition: str,
-    title: str,
+    fallback_name: str,
     *,
     ai_enabled: bool,
     ai_model: str,
     ai_tone: str,
     seed: str = "",
+    family: str = "",
+    recent: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], str]:
+    recent = recent or []
     folders: list[str] = []
     images: list[str] = []
     for _, row in rows.iterrows():
@@ -460,37 +385,20 @@ def group_to_public_listing(
             images.append(image)
     price = min(price_number(row.get("Precio")) for _, row in rows.iterrows() if price_number(row.get("Precio")))
     parsed_rows = [parse_title(text_value(row.get("Titulo"))) for _, row in rows.iterrows()]
-    colors = join_human([parsed["color"] for parsed in parsed_rows])
-    sizes = ", ".join(sort_sizes([parsed["size"] for parsed in parsed_rows]))
     location = text_value(rows.iloc[0].get("Ubicacion")) or "Managua, Nicaragua"
-    fallback = grouped_description(rows, title, seed)
-    description, source = generate_sales_description(
-        {
-            "titulo": title,
-            "precio": price_text(price),
-            "colores": colors,
-            "tallas": sizes,
-            "ubicacion": location,
-            "condicion": condition,
-        },
-        fallback,
-        enabled=ai_enabled,
-        model=ai_model,
-        tone=ai_tone,
-    )
-    tags, _ = generate_product_tags(
-        {
-            "titulo": title,
-            "categoria": category,
-            "colores": colors,
-            "tallas": sizes,
-            "uso": "entrenamiento y uso diario",
-        },
-        enabled=ai_enabled,
-        model=ai_model,
+    copy = group_copy(rows, family=family, seed=seed, recent=recent, fallback_name=fallback_name)
+    description, tags, source = finish_listing(
+        copy,
+        {"precio": price_text(price), "colores": join_human([parsed["color"] for parsed in parsed_rows]),
+         "tallas": ", ".join(sort_sizes([parsed["size"] for parsed in parsed_rows])), "ubicacion": location,
+         "condicion": condition, "categoria": category},
+        recent,
+        ai_enabled=ai_enabled,
+        ai_model=ai_model,
+        ai_tone=ai_tone,
     )
     listing = {
-        "Titulo": title,
+        "Titulo": copy.title,
         "Precio": price,
         "Categoria": category,
         "Condicion": condition,
@@ -528,6 +436,9 @@ def build_jobs(args: argparse.Namespace) -> list[dict[str, Any]]:
     override_images = validated_override_images(args.image_paths_json)
     override_tags = validated_override_tags(args.tags_json)
     seed = str(getattr(args, "variant_seed", "") or "")
+    family = str(getattr(args, "family_key", "") or "")
+    # Solo se compara con lo publicado cuando la redaccion varia (calendario).
+    recent = recent_copies() if seed else []
 
     jobs: list[dict[str, Any]] = []
     if mode == "individual":
@@ -544,7 +455,10 @@ def build_jobs(args: argparse.Namespace) -> list[dict[str, Any]]:
                 ai_model=ai_model,
                 ai_tone=ai_tone,
                 seed=seed,
+                family=family,
+                recent=recent,
             )
+            recent.append({"title": listing["Titulo"], "description": listing["Descripcion"]})
             apply_image_override(listing, override_images)
             apply_tags_override(listing, override_tags)
             name = text_value(row.get("Sku")) or listing["Titulo"]
@@ -572,18 +486,21 @@ def build_jobs(args: argparse.Namespace) -> list[dict[str, Any]]:
         if price_override:
             group = group.copy()
             group["Precio"] = price_override
-        title = grouped_title(group, mode, args.name or f"listing_{index}", seed)
         listing, description_source = group_to_public_listing(
             group,
             images_root,
             category,
             condition,
-            title,
+            args.name or f"listing_{index}",
             ai_enabled=ai_enabled,
             ai_model=ai_model,
             ai_tone=ai_tone,
             seed=seed,
+            family=family,
+            recent=recent,
         )
+        title = listing["Titulo"]
+        recent.append({"title": title, "description": listing["Descripcion"]})
         apply_image_override(listing, override_images)
         apply_tags_override(listing, override_tags)
         excel = write_listing(output_dir, title, [listing])
@@ -620,7 +537,8 @@ def main() -> None:
     parser.add_argument("--price-override", default="")
     parser.add_argument("--image-paths-json", default="")
     parser.add_argument("--tags-json", default="")
-    parser.add_argument("--variant-seed", default="", help="Cuenta y semana; cambia la redaccion entre cuentas.")
+    parser.add_argument("--variant-seed", default="", help="Cuenta, familia y dia; cambia la redaccion de cada anuncio.")
+    parser.add_argument("--family-key", default="", help="Familia del calendario (bolsos, calcetas...); elige el vocabulario.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 

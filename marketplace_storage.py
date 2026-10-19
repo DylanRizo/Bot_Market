@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from functools import lru_cache
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
@@ -244,6 +244,16 @@ class MarketplaceStore:
                     ON publish_events(account, published_at);
                 """
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(publish_events)")}
+            if "cover_path" not in columns:
+                # Foto de portada con la que salio el anuncio: sirve para comparar portadas.
+                connection.execute("ALTER TABLE publish_events ADD COLUMN cover_path TEXT NOT NULL DEFAULT ''")
+                connection.execute("ALTER TABLE publish_events ADD COLUMN cover_hash TEXT NOT NULL DEFAULT ''")
+            if "title" not in columns:
+                # Texto con el que salio: el siguiente anuncio se redacta distinto.
+                connection.execute("ALTER TABLE publish_events ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+                connection.execute("ALTER TABLE publish_events ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+                connection.execute("ALTER TABLE publish_events ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
 
     def set_setting(self, key: str, value: Any) -> None:
         with self.connect() as connection:
@@ -528,10 +538,15 @@ class MarketplaceStore:
         inserted = 0
         with self.connect() as connection:
             for path in paths:
+                # Volver a publicar una foto ya usada renueva su fecha: los 14 dias
+                # para poder repetirla cuentan desde la ultima vez.
                 cursor = connection.execute(
-                    """INSERT OR IGNORE INTO media_usage(
+                    """INSERT INTO media_usage(
                            account, image_hash, image_path, queue_id, family_key, used_at
-                       ) VALUES (?, ?, ?, ?, ?, ?)""",
+                       ) VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(account, image_hash) DO UPDATE SET
+                           image_path=excluded.image_path, queue_id=excluded.queue_id,
+                           family_key=excluded.family_key, used_at=excluded.used_at""",
                     (
                         item["account"], self._image_hash(path), str(path), queue_id,
                         item.get("family_key") or "", now_iso(),
@@ -634,12 +649,54 @@ class MarketplaceStore:
                 (next_attempt_at, detail[:1000], now_iso(), queue_id),
             )
 
-    def record_publish_event(self, account: str, name: str = "", source: str = "", at: str | None = None) -> None:
+    def record_publish_event(
+        self,
+        account: str,
+        name: str = "",
+        source: str = "",
+        at: str | None = None,
+        cover: str = "",
+        description: str = "",
+        tags: Iterable[str] = (),
+    ) -> None:
+        cover_hash = ""
+        if cover and Path(cover).is_file():
+            try:
+                cover_hash = self.image_hash(Path(cover))
+            except OSError:
+                cover_hash = ""
         with self.connect() as connection:
             connection.execute(
-                "INSERT INTO publish_events(account, name, source, published_at) VALUES (?, ?, ?, ?)",
-                (account, name[:200], source, at or now_iso()),
+                """INSERT INTO publish_events(account, name, source, published_at, cover_path, cover_hash,
+                                              title, description, tags)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (account, name[:200], source, at or now_iso(), cover, cover_hash,
+                 name[:200], description[:2000], ";".join(tags)[:500]),
             )
+
+    def recent_copies(self, since: str) -> list[dict[str, str]]:
+        """Textos publicados desde ``since`` (cualquier cuenta) y titulos de los
+        anuncios que siguen en Facebook, para no repetir la redaccion."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT account, title, description, tags FROM publish_events
+                   WHERE published_at >= ? AND title != '' ORDER BY published_at DESC LIMIT 300""",
+                (since,),
+            ).fetchall()
+            copies = [dict(row) for row in rows]
+            has_listings = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='listings'"
+            ).fetchone()
+            if has_listings:
+                for row in connection.execute("SELECT account, title FROM listings WHERE present=1 AND title != ''"):
+                    copies.append({"account": row["account"], "title": row["title"], "description": "", "tags": ""})
+        return copies
+
+    def last_publish_event_any(self) -> str:
+        """La publicacion mas reciente de cualquier cuenta."""
+        with self.connect() as connection:
+            row = connection.execute("SELECT MAX(published_at) AS last FROM publish_events").fetchone()
+        return str(row["last"] or "") if row else ""
 
     def publish_events(self, account: str, since: str) -> list[str]:
         """Fechas de publicacion de la cuenta desde ``since``, de la mas antigua a la mas nueva."""
@@ -732,8 +789,21 @@ class MarketplaceStore:
         account: str = "",
         queue_id: str | None = None,
     ) -> str:
-        alert_id = str(uuid.uuid4())
         timestamp = now_iso()
+        with self.connect() as connection:
+            # Un problema que se repite (el SGI caido, Drive sin permiso) es una
+            # sola alerta abierta que se actualiza, no cientos iguales.
+            existing = connection.execute(
+                "SELECT id FROM alerts WHERE status='open' AND code=? AND account=? AND IFNULL(queue_id, '')=?",
+                (code, account, queue_id or ""),
+            ).fetchone()
+            if existing:
+                connection.execute(
+                    "UPDATE alerts SET message=?, severity=?, updated_at=? WHERE id=?",
+                    (message, severity, timestamp, existing["id"]),
+                )
+                return str(existing["id"])
+        alert_id = str(uuid.uuid4())
         with self.connect() as connection:
             connection.execute(
                 """INSERT INTO alerts(id, severity, code, message, account, queue_id, status, created_at, updated_at)
