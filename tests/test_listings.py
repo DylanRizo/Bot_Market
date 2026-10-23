@@ -283,3 +283,40 @@ def test_el_chaleco_sin_mangas_no_se_confunde_con_la_camisa():
 def test_estado_active_cuenta_como_activo():
     card = listings.parse_card(tarjeta("Medias altas", estado="Active", fecha="9/20"), HOY)
     assert card["status"] == "in_stock"
+
+
+# --- avisos de Facebook, gemelos y copias entre cuentas ---------------------------
+
+def test_el_consejo_de_facebook_no_es_el_titulo():
+    raw = tarjeta("Chaleco de lana sin mangas | Tallas S a L", clics="96 clicks on listing")
+    raw["texto"] = "Tip: Renew your listing?\n" + raw["texto"]
+    card = listings.parse_card(raw, HOY)
+    assert card["title"] == "Chaleco de lana sin mangas | Tallas S a L"
+    assert card["clicks_14d"] == 96
+
+
+def test_dos_anuncios_identicos_se_guardan_aparte_y_no_se_tocan(store):
+    cards_para(store, "cuenta1",
+               tarjeta("Medias Altas de Descanso", fecha="9/10", clics="0 clicks on listing"),
+               tarjeta("Medias Altas de Descanso", fecha="9/10", clics="4 clicks on listing"))
+    gemelos = [item for item in listings.list_listings(store) if item["title"] == "Medias Altas de Descanso"]
+    assert sorted(item["clicks_14d"] for item in gemelos) == [0, 4]
+    listings.refresh_recommendations(store, {"publishable": ["CAL-15NEG-M"], "without_photos": [], "price_issues": []},
+                                     today=HOY)
+    gemelos = [item for item in listings.list_listings(store) if item["title"] == "Medias Altas de Descanso"]
+    pobre = min(gemelos, key=lambda item: item["clicks_14d"])
+    assert pobre["recommendation"] == "review" and "a mano" in pobre["reason"]
+    # Ninguna accion automatica: los botones se buscan por titulo y tocarian cualquiera.
+    with pytest.raises(ValueError, match="dos anuncios iguales"):
+        listings.queue_action(store, pobre["key"], "delete")
+
+
+def test_copia_escondida_frente_a_otra_cuenta_se_propone_borrar(store):
+    cards_para(store, "cuenta1", tarjeta("Chaleco de lana sin mangas - Azul", fecha="9/5", clics="0 clicks on listing"))
+    cards_para(store, "cuenta2", tarjeta("Chaleco de lana sin mangas - Gris", fecha="9/8", clics="96 clicks on listing"))
+    listings.refresh_recommendations(store, {"publishable": ["CHA-AZU-M"], "without_photos": [], "price_issues": []},
+                                     today=HOY)
+    por_cuenta = {item["account"]: item for item in listings.list_listings(store)}
+    assert por_cuenta["cuenta1"]["recommendation"] == "delete"
+    assert "cuenta2" in por_cuenta["cuenta1"]["reason"] and "96" in por_cuenta["cuenta1"]["reason"]
+    assert por_cuenta["cuenta2"]["recommendation"] != "delete"

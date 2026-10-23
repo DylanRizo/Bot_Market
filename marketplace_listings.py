@@ -146,10 +146,21 @@ def parse_listed_on(text: str, today: date) -> date | None:
     return candidate
 
 
+# Consejo que Facebook pone sobre algunas tarjetas; no es el titulo del anuncio.
+TIP_LINE = re.compile(r"^(tip|consejo|sugerencia)\s*:", re.IGNORECASE)
+TWIN_REASON = (
+    "Duplicado exacto: hay otro anuncio con el mismo titulo y la misma fecha en esta cuenta y "
+    "Facebook lo trata como copia. Borra a mano en Facebook el de menos clics; el bot no puede "
+    "distinguir cual es cual."
+)
+
+
 def parse_card(raw: dict[str, Any], today: date) -> dict[str, Any] | None:
     """Convierte el texto de una tarjeta de "Tus anuncios" en datos."""
     text = str(raw.get("texto") or "")
     lines = [line.strip() for line in text.splitlines() if line.strip() and line.strip() not in {"·", "\xa0"}]
+    while lines and TIP_LINE.match(lines[0]):
+        lines.pop(0)
     if not lines:
         return None
     title = lines[0]
@@ -324,9 +335,13 @@ def save_scan(store: MarketplaceStore, account: str, cards: list[dict[str, Any]]
     timestamp = now_iso()
     bot_titles = {plain(name) for name in _bot_titles(store, account)}
     seen: set[str] = set()
+    twins: dict[str, int] = {}
+    ordered = sorted(cards, key=lambda card: -int(card.get("clicks_14d") or 0))
     with store.connect() as connection:
-        for card in cards:
-            key = listing_key(account, card["title"], card["listed_on"])
+        for card in ordered:
+            base = listing_key(account, card["title"], card["listed_on"])
+            twins[base] = twins.get(base, 0) + 1
+            key = base if twins[base] == 1 else listing_key(account, card["title"], f"{card['listed_on']}#{twins[base]}")
             if key in seen:
                 continue
             seen.add(key)
@@ -513,6 +528,11 @@ def refresh_recommendations(
     for listing in listings:
         if listing["status"] == "in_stock" and listing["family_key"]:
             by_account_family.setdefault((listing["account"], listing["family_key"]), []).append(listing)
+    twin_groups = twin_index(listings)
+    # El anuncio con mas clics de cada producto en cada cuenta.
+    family_best: dict[str, dict[str, int]] = {}
+    for (account, family), group in by_account_family.items():
+        family_best.setdefault(family, {})[account] = max(int(item["clicks_14d"] or 0) for item in group)
     with store.connect() as connection:
         for listing in listings:
             family = listing["family_key"]
@@ -541,6 +561,9 @@ def refresh_recommendations(
                 last_renew=last_renew,
                 renew_count=renew_count,
             )
+            action, reason = cross_account_copy(listing, today, family_best, action, reason)
+            if len(twin_groups.get(twin_id(listing), [])) > 1 and action in EXECUTABLE_ACTIONS:
+                action, reason = "review", TWIN_REASON
             listing["recommendation"], listing["reason"] = action, reason
         # Republicar varios anuncios viejos del mismo producto crea duplicados: se
         # recomienda solo el que tuvo mas interes (y a igualdad, el mas reciente).
@@ -565,6 +588,46 @@ def refresh_recommendations(
     return counts
 
 
+def twin_id(listing: dict[str, Any]) -> tuple[str, str, str]:
+    return (listing["account"], plain(listing["title"]), str(listing.get("listed_on") or ""))
+
+
+def twin_index(listings: Iterable[dict[str, Any]]) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for listing in listings:
+        if listing.get("present", 1) and listing.get("listed_on"):
+            groups.setdefault(twin_id(listing), []).append(listing)
+    return groups
+
+
+def cross_account_copy(
+    listing: dict[str, Any], today: date, family_best: dict[str, dict[str, int]], action: str, reason: str
+) -> tuple[str, str]:
+    """Sin interes aqui y con mucho en otra cuenta: Facebook muestra solo uno de los dos."""
+    if listing["status"] != "in_stock" or action not in {"renew", "edit", "keep"} or not listing["family_key"]:
+        return action, reason
+    age = age_days(str(listing.get("listed_on") or ""), today)
+    clicks = int(listing.get("clicks_14d") or 0)
+    if age is None or age < RULES["renew_after_days"] or clicks >= RULES["low_clicks"]:
+        return action, reason
+    others = {
+        account: best for account, best in family_best.get(listing["family_key"], {}).items()
+        if account != listing["account"] and best >= RULES["high_clicks"]
+    }
+    if not others:
+        return action, reason
+    account, best = max(others.items(), key=lambda item: item[1])
+    return "delete", (
+        f"La cuenta {account} tiene este producto con {best} clics y aqui lleva {clicks} en {age} dias: "
+        "Facebook probablemente lo trata como copia y lo esconde. Borralo; el calendario lo vuelve a "
+        "proponer con texto nuevo y otra portada."
+    )
+
+
+def twin_exists(store: MarketplaceStore, listing: dict[str, Any]) -> bool:
+    return len(twin_index(list_listings(store, listing["account"])).get(twin_id(listing), [])) > 1
+
+
 # --- acciones ----------------------------------------------------------------
 
 def queue_action(store: MarketplaceStore, key: str, action: str, origin: str = "manual") -> int:
@@ -574,6 +637,8 @@ def queue_action(store: MarketplaceStore, key: str, action: str, origin: str = "
     listing = get_listing(store, key)
     if not listing:
         raise ValueError("No encontre ese anuncio. Vuelve a revisar los anuncios.")
+    if twin_exists(store, listing):
+        raise ValueError("Hay dos anuncios iguales (mismo titulo y fecha); hazlo a mano en Facebook.")
     with store.connect() as connection:
         existing = connection.execute(
             "SELECT id FROM listing_actions WHERE key=? AND status IN ('pending', 'running')", (key,)
@@ -772,8 +837,12 @@ def act_in_browser(debugger_address: str, title: str, listed_on: str, action: st
     driver.switch_to.new_window("tab")
     try:
         cards = _open_selling(driver)
-        if not any(_card_matches(raw, title, listed_on) for raw in cards):
+        matches = sum(1 for raw in cards if _card_matches(raw, title, listed_on))
+        if not matches:
             raise RuntimeError("No encontre el anuncio en Tus anuncios; puede que ya no exista.")
+        if matches > 1:
+            # Los botones se buscan por el titulo: con dos iguales se tocaria cualquiera.
+            raise RuntimeError("Hay dos anuncios iguales (mismo titulo y fecha); hazlo a mano en Facebook.")
 
         def current_state() -> list[dict[str, Any]]:
             """Vuelve a leer la pagina y devuelve las tarjetas con este titulo."""
