@@ -73,6 +73,44 @@ def chrome_status(address: str) -> tuple[bool, str]:
         return False, f"La sesion de Chrome no responde en {address}: {exc}"
 
 
+# Chrome que abrio el propio trabajador: se cierra al terminar para liberar
+# memoria (cada cuenta ocupa ~800 MB). Uno que ya estaba abierto (lo abrio la
+# persona para responder mensajes) no se toca.
+_BOT_OPENED: dict[str, str] = {}
+
+
+def close_chrome(address: str) -> bool:
+    """Cierra Chrome por su puerto de depuracion, como al cerrar la ventana (guarda la sesion)."""
+    import websocket
+
+    try:
+        with urllib.request.urlopen(f"http://{address}/json/version", timeout=2) as response:
+            url = json.loads(response.read().decode("utf-8", errors="replace"))["webSocketDebuggerUrl"]
+        # Sin el encabezado Origin: Chrome rechaza (403) las conexiones que lo traen.
+        connection = websocket.create_connection(url, timeout=5, suppress_origin=True)
+        try:
+            connection.send(json.dumps({"id": 1, "method": "Browser.close"}))
+            try:
+                connection.recv()
+            except Exception:  # noqa: BLE001 - Chrome puede cerrar antes de responder
+                pass
+        finally:
+            connection.close()
+    except Exception:  # noqa: BLE001 - si no responde, ya esta cerrado
+        return False
+    return True
+
+
+def release_idle_chrome(close: Any = close_chrome) -> list[str]:
+    """Cierra los Chrome que abrio el bot. Devuelve las cuentas cerradas."""
+    closed = []
+    for account_key, address in list(_BOT_OPENED.items()):
+        _BOT_OPENED.pop(account_key, None)
+        if close(address):
+            closed.append(account_key)
+    return closed
+
+
 def ensure_chrome(account_key: str, account: dict[str, Any]) -> tuple[bool, str]:
     address = str(account.get("debugger_address") or "")
     ok, detail = chrome_status(address)
@@ -96,6 +134,7 @@ def ensure_chrome(account_key: str, account: dict[str, Any]) -> tuple[bool, str]
         time.sleep(2)
         ok, detail = chrome_status(address)
         if ok:
+            _BOT_OPENED[account_key] = address
             return True, f"Chrome reiniciado: {detail}"
     return False, detail
 
@@ -701,6 +740,11 @@ def main() -> None:
             except Exception as nested:  # noqa: BLE001
                 log(f"No pude registrar el error en la base: {nested}")
             worked = False
+        try:
+            for account_key in release_idle_chrome():
+                log(f"Chrome de {account_key} cerrado para liberar memoria; se abre solo cuando haga falta.")
+        except Exception as exc:  # noqa: BLE001 - cerrar Chrome nunca debe frenar al trabajador
+            log(f"No pude cerrar Chrome: {exc}")
         if args.once:
             break
         time.sleep(2 if worked else max(5, args.poll_seconds))

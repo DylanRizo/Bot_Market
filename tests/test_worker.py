@@ -261,3 +261,60 @@ def test_el_trabajador_deja_su_numero_de_proceso(tmp_path):
     archivo = tmp_path / "worker.pid"
     worker.register_pid(archivo)
     assert archivo.read_text(encoding="utf-8") == str(os.getpid())
+
+
+def test_cierra_solo_el_chrome_que_abrio_el_bot(monkeypatch):
+    import marketplace_scheduler_worker as worker
+
+    monkeypatch.setattr(worker, "_BOT_OPENED", {})
+    abiertos = {"127.0.0.1:9223"}  # Chrome de Dylan ya abierto por la persona
+    monkeypatch.setattr(worker, "chrome_status", lambda address: (address in abiertos, "Chrome"))
+    monkeypatch.setattr(worker.subprocess, "Popen", lambda *a, **k: abiertos.add("127.0.0.1:9222"))
+    monkeypatch.setattr(worker.time, "sleep", lambda seconds: None)
+
+    assert worker.ensure_chrome("sebastian", {"debugger_address": "127.0.0.1:9222"})[0]
+    assert worker.ensure_chrome("Dylan", {"debugger_address": "127.0.0.1:9223"})[0]
+    cerrados = []
+    assert worker.release_idle_chrome(lambda address: cerrados.append(address) or True) == ["sebastian"]
+    assert cerrados == ["127.0.0.1:9222"]
+    # Ya cerrado: la siguiente vuelta no intenta nada.
+    assert worker.release_idle_chrome(lambda address: cerrados.append(address) or True) == []
+
+
+def test_cerrar_chrome_que_no_responde_no_falla():
+    import marketplace_scheduler_worker as worker
+
+    assert worker.close_chrome("127.0.0.1:1") is False
+
+
+def test_cerrar_chrome_se_conecta_sin_origin(monkeypatch):
+    """Chrome rechaza con 403 las conexiones con encabezado Origin (asi fallo el 22 de octubre)."""
+    import io
+    import json as json_module
+
+    import websocket
+
+    import marketplace_scheduler_worker as worker
+
+    pedidos = {}
+
+    class Conexion:
+        def send(self, texto):
+            pedidos["enviado"] = json_module.loads(texto)
+
+        def recv(self):
+            return "{}"
+
+        def close(self):
+            pass
+
+    def conectar(url, **opciones):
+        pedidos["opciones"] = opciones
+        return Conexion()
+
+    monkeypatch.setattr(worker.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(
+        b'{"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/x"}'))
+    monkeypatch.setattr(websocket, "create_connection", conectar)
+    assert worker.close_chrome("127.0.0.1:9222") is True
+    assert pedidos["opciones"]["suppress_origin"] is True
+    assert pedidos["enviado"]["method"] == "Browser.close"
