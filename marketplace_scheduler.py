@@ -300,15 +300,20 @@ def reuse_check(
     conflicts = store.media_conflicts(account, list(images))
     if not conflicts:
         return True, None
+    import marketplace_listings
+
     current = now or datetime.now()
     last = max(datetime.fromisoformat(str(row["used_at"])) for row in conflicts)
     days = (current - last).days
-    if days < int(safety.get("reuse_days", 14)):
+    # Si la persona borro el anuncio desde el panel despues de usar estas fotos,
+    # no se esperan los dias de repeticion: quiere que vuelva a salir.
+    deleted_at = marketplace_listings.republish_requests(store).get((account, family), "")
+    requested = bool(deleted_at) and deleted_at > last.isoformat(timespec="seconds")
+    if days < int(safety.get("reuse_days", 14)) and not requested:
         return False, None
     scan = store.worker_state(f"listings_scan:{account}")
     if scan.get("status") != "ok":
         return False, None
-    import marketplace_listings
 
     same = [item for item in marketplace_listings.list_listings(store, account) if item["family_key"] == family]
     if any(item["status"] in {"in_stock", "pending"} for item in same):
@@ -318,6 +323,7 @@ def reuse_check(
     return True, {
         "last_used": last.isoformat(timespec="seconds"),
         "days": days,
+        "requested": requested,
         "replace_listing": {
             "key": replace["key"], "title": replace["title"], "listed_on": replace["listed_on"],
         } if replace else None,
@@ -325,6 +331,8 @@ def reuse_check(
 
 
 def reuse_detail(reuse: dict[str, Any]) -> str:
+    if reuse.get("requested") and not reuse.get("replace_listing"):
+        return "Volver a publicar: lo borraste desde Anuncios; sale con texto nuevo y otra portada."
     text = f"Volver a publicar: esta cuenta ya lo publico hace {reuse['days']} dias con estas fotos."
     old = reuse.get("replace_listing")
     if old:
@@ -423,6 +431,12 @@ def _generate_week(
             default=datetime.min,
         ),
     )
+    # Lo que la persona borro desde Anuncios va primero en esa cuenta, si todavia
+    # no se volvio a publicar ni esta en el calendario.
+    pending_republish = {
+        key for key, deleted_at in __import__("marketplace_listings").republish_requests(store).items()
+        if key[0] in config["accounts"] and str(last_used.get(key, datetime.min).isoformat()) < deleted_at
+    }
     created: list[str] = []
     skipped_slots = 0
     cursor = 0
@@ -436,8 +450,12 @@ def _generate_week(
         )
         selected: dict[str, Any] | None = None
         selected_accounts: list[str] = []
-        for offset in range(len(jobs)):
-            candidate = jobs[(cursor + offset) % len(jobs)]
+        first = [
+            job for job in jobs
+            if any((account, str(job.get("family_key") or "")) in pending_republish for account in target_accounts)
+        ]
+        order = first + [jobs[(cursor + offset) % len(jobs)] for offset in range(len(jobs))]
+        for position, candidate in enumerate(order):
             family = str(candidate.get("family_key") or "")
             eligible_accounts: list[str] = []
             for account in target_accounts:
@@ -458,7 +476,8 @@ def _generate_week(
             if eligible_accounts:
                 selected = candidate
                 selected_accounts = eligible_accounts
-                cursor = (cursor + offset + 1) % len(jobs)
+                if position >= len(first):
+                    cursor = (cursor + position - len(first) + 1) % len(jobs)
                 break
         if not selected:
             skipped_slots += 1
@@ -477,6 +496,10 @@ def _generate_week(
             _ok, reuse = reuse_check(store, account, family, store.job_image_paths(account_job), safety, account_slot)
             if reuse:
                 account_job["reuse"] = reuse
+            pending_republish.discard((account, family))
+            # Repetir fotos espera siempre la aprobacion de la persona, salvo que
+            # ella misma lo pidio al borrar el anuncio: entonces va como cualquier otra.
+            needs_approval = bool(reuse) and not reuse.get("requested")
             fingerprint = listing_fingerprint(account_job, account)
             queue_id, was_created = store.enqueue(
                 {
@@ -487,9 +510,8 @@ def _generate_week(
                     "name": selected.get("name") or ASSISTANT_PRESETS.get(family, {}).get("label") or selected.get("name"),
                     "job": account_job,
                     "fingerprint": fingerprint,
-                    # Repetir fotos en una cuenta siempre espera la aprobacion de la persona.
-                    "status": "planned" if reuse else initial_status,
-                    "approved": False if reuse else approved,
+                    "status": "planned" if needs_approval else initial_status,
+                    "approved": False if needs_approval else approved,
                     "detail": reuse_detail(reuse) if reuse else "",
                     "max_attempts": config["max_attempts"],
                     "dedupe_key": f"{scheduled_text}|{account}|{family}",
@@ -522,7 +544,8 @@ def approve_items(store: MarketplaceStore, ids: list[str] | None = None, include
     for item in candidates:
         if requested and item["id"] not in requested:
             continue
-        if not include_reuse and (item.get("job") or {}).get("reuse"):
+        reuse = (item.get("job") or {}).get("reuse") or {}
+        if not include_reuse and reuse and not reuse.get("requested"):
             continue
         if store.update_queue_item(item["id"], status="queued", approved=True):
             changed += 1

@@ -198,7 +198,10 @@ def execute_action(
     store.heartbeat(action_state_key(row["account"]), {"at_epoch": time.time()})
     done = re.search(r"\[listings-done\](.*)", output)
     if code == 0 and done:
-        listings.finish_action(store, row["id"], "done", done.group(1).strip())
+        detail = done.group(1).strip()
+        if row["action"] == "delete" and row.get("origin") == "manual":
+            detail += " Entra primero en el proximo calendario de esta cuenta, con texto nuevo."
+        listings.finish_action(store, row["id"], "done", detail)
         if row["action"] == "relist":
             record_publication(store, row["account"], listing["title"], "republicado")
         request_scan(store, row["account"])

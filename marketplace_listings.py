@@ -115,10 +115,36 @@ def plain(text: str) -> str:
 
 def family_for_title(title: str) -> str:
     value = f" {plain(title)} "
+    # Primero los nombres que usa el redactor de anuncios ("Maletin deportivo",
+    # "Calcetas con disenos divertidos"); el mas largo gana. El 24 de octubre unas
+    # calcetas multicolor se leyeron como de compresion y el bot propuso borrar
+    # el anuncio de compresion con 62 clics.
+    for name, family in _copy_names():
+        if name in value:
+            return family
     for family, words in FAMILY_KEYWORDS:
         if any(word in value for word in words):
             return family
     return ""
+
+
+_COPY_NAMES: list[tuple[str, str]] | None = None
+
+
+def _copy_names() -> list[tuple[str, str]]:
+    global _COPY_NAMES
+    if _COPY_NAMES is None:
+        try:
+            from marketplace_copy import PROFILES
+        except Exception:  # noqa: BLE001 - sin el redactor quedan las palabras clave
+            PROFILES = {}
+        names = {
+            (plain(re.sub(r"\{[a-z_]+\}", "", name)).strip(), family)
+            for family, profile in PROFILES.items()
+            for name in profile.names
+        }
+        _COPY_NAMES = sorted((item for item in names if len(item[0]) >= 5), key=lambda item: -len(item[0]))
+    return _COPY_NAMES
 
 
 # --- lectura de tarjetas -----------------------------------------------------
@@ -619,8 +645,8 @@ def cross_account_copy(
     account, best = max(others.items(), key=lambda item: item[1])
     return "delete", (
         f"La cuenta {account} tiene este producto con {best} clics y aqui lleva {clicks} en {age} dias: "
-        "Facebook probablemente lo trata como copia y lo esconde. Borralo; el calendario lo vuelve a "
-        "proponer con texto nuevo y otra portada."
+        "Facebook probablemente lo trata como copia y lo esconde. Borralo: entra primero en el proximo "
+        "calendario de esta cuenta, con texto nuevo y otra portada."
     )
 
 
@@ -675,6 +701,24 @@ def finish_action(store: MarketplaceStore, action_id: int, status: str, detail: 
 def set_action_running(store: MarketplaceStore, action_id: int) -> None:
     with store.connect() as connection:
         connection.execute("UPDATE listing_actions SET status='running' WHERE id=?", (action_id,))
+
+
+def republish_requests(store: MarketplaceStore) -> dict[tuple[str, str], str]:
+    """(cuenta, producto) -> cuando la persona borro un anuncio desde el panel.
+
+    Borrar a mano significa "vuelve a publicarlo": el siguiente calendario lo
+    pone primero en esa cuenta, sin esperar los dias de repeticion de fotos.
+    """
+    ensure_schema(store)
+    with store.connect() as connection:
+        rows = connection.execute(
+            """SELECT a.account, l.family_key, MAX(a.finished_at) AS finished_at
+               FROM listing_actions a JOIN listings l ON l.key = a.key
+               WHERE a.action = 'delete' AND a.origin = 'manual' AND a.status = 'done'
+                 AND l.family_key != '' AND a.finished_at IS NOT NULL
+               GROUP BY a.account, l.family_key"""
+        ).fetchall()
+    return {(row["account"], row["family_key"]): str(row["finished_at"]) for row in rows}
 
 
 def recent_actions(store: MarketplaceStore, limit: int = 30) -> list[dict[str, Any]]:

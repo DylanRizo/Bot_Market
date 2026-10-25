@@ -147,3 +147,55 @@ def test_calendario_vacio_espera_una_hora_y_avisa_una_vez(store, monkeypatch):
     worker.ensure_future_calendar(store, {})
     assert len(llamadas) == 1
     assert [alert["code"] for alert in store.list_alerts()] == ["CALENDAR_EMPTY"]
+
+
+def borrar_desde_el_panel(store, cuenta, titulo, fecha):
+    hoy = date.today()
+    item = next(i for i in listings.list_listings(store, cuenta) if i["title"] == titulo)
+    accion = listings.queue_action(store, item["key"], "delete")
+    listings.finish_action(store, accion, "done", "Eliminar: hecho y comprobado en Facebook.")
+    # La lectura siguiente ya no lo ve.
+    listings.save_scan(store, cuenta, [listings.parse_card({"texto": tarjeta("Straps - Verde", "In stock", "9/1"),
+                                                            "hrefs": [], "botones": []}, hoy)], today=hoy)
+
+
+def test_lo_que_borras_en_anuncios_entra_primero_en_el_calendario(store, photo, monkeypatch):
+    fotos = [photo("a")]
+    usar_fotos(store, "cuenta1", fotos, hace_dias=3)  # menos de los 14 dias de espera
+    hace = date.today() - timedelta(days=3)
+    revisar_anuncios(store, "cuenta1", tarjeta("Bolso deportivo - Negro", "In stock", f"{hace.month}/{hace.day}"))
+    assert scheduler.reuse_check(store, "cuenta1", "bolsos", fotos, load_safety(store))[0] is False
+
+    borrar_desde_el_panel(store, "cuenta1", "Bolso deportivo - Negro", hace)
+    ok, reuse = scheduler.reuse_check(store, "cuenta1", "bolsos", fotos, load_safety(store))
+    assert ok and reuse["requested"] and reuse["replace_listing"] is None
+
+    otras = [photo(f"otra{n}") for n in range(3)]
+    monkeypatch.setattr(scheduler, "build_family_jobs", lambda *a, **k: [
+        {"name": "Straps", "family_key": "straps", "image_paths": [str(otras[0])], "excel": "a.xlsx", "images_root": "f"},
+        {"name": "Bolsos", "family_key": "bolsos", "image_paths": [str(f) for f in fotos], "excel": "a.xlsx", "images_root": "f"},
+    ])
+    monkeypatch.setattr(scheduler, "custom_rotation_jobs", lambda *a, **k: [])
+    save_safety(store, {"warmup_enabled": False, "family_repeat_days": 0})
+    config = scheduler.normalize_config({
+        "mode": "autonomous", "accounts": ["cuenta1"], "account": "cuenta1", "active_days": list(range(7)),
+        "start_time": "09:00", "end_time": "18:00", "max_per_day": 1, "horizon_days": 2, "cooldown_days": 0,
+    })
+    scheduler.generate_week(store, config, start_date=date.today() + timedelta(days=1))
+    nuevos = sorted((i for i in store.list_queue() if i["status"] in ("queued", "planned")), key=lambda i: i["scheduled_at"])
+    # Primero el que borraste, y sin la aprobacion especial de las repeticiones.
+    assert nuevos[0]["family_key"] == "bolsos"
+    assert nuevos[0]["status"] == "queued" and nuevos[0]["approved"] is True
+    assert "lo borraste desde Anuncios" in nuevos[0]["detail"]
+    assert all(item["family_key"] != "bolsos" for item in nuevos[1:]), "no se programa dos veces"
+
+
+def test_tras_volver_a_publicarlo_ya_no_se_salta_la_espera(store, photo):
+    fotos = [photo("a")]
+    usar_fotos(store, "cuenta1", fotos, hace_dias=3)
+    hace = date.today() - timedelta(days=3)
+    revisar_anuncios(store, "cuenta1", tarjeta("Bolso deportivo - Negro", "In stock", f"{hace.month}/{hace.day}"))
+    borrar_desde_el_panel(store, "cuenta1", "Bolso deportivo - Negro", hace)
+    # Se volvio a publicar con esas fotos: la peticion queda cumplida.
+    usar_fotos(store, "cuenta1", fotos, hace_dias=0)
+    assert scheduler.reuse_check(store, "cuenta1", "bolsos", fotos, load_safety(store))[0] is False

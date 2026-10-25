@@ -320,3 +320,25 @@ def test_copia_escondida_frente_a_otra_cuenta_se_propone_borrar(store):
     assert por_cuenta["cuenta1"]["recommendation"] == "delete"
     assert "cuenta2" in por_cuenta["cuenta1"]["reason"] and "96" in por_cuenta["cuenta1"]["reason"]
     assert por_cuenta["cuenta2"]["recommendation"] != "delete"
+
+
+@pytest.mark.parametrize("titulo, familia", [
+    ("Calcetas con diseños divertidos (Multicolor)", "calcetas_multicolor"),
+    ("Medias de compresión 15-20 mmHg tallas S a XL en Beige y Negro", "calcetas"),
+    ("Maletín deportivo (Negro)", "bolsos"),
+    ("Manga deportiva para brazo - Negro", "mangas_brazo"),
+    ("Correas de levantamiento | Verde", "straps"),
+    ("Short YoungLA para gym - Negro", "shorts_youngla"),
+    ("Enterizo largo de gym - Café", "enterizos_largos"),
+])
+def test_reconoce_los_nombres_que_usa_el_redactor(titulo, familia):
+    assert listings.family_for_title(titulo) == familia
+
+
+def test_todos_los_nombres_del_redactor_vuelven_a_su_familia():
+    from marketplace_copy import PROFILES
+
+    for familia, perfil in PROFILES.items():
+        for nombre in perfil.names:
+            titulo = nombre.format(extra=" 15-20 mmHg") + " - Negro"
+            assert listings.family_for_title(titulo) == familia, titulo
