@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +73,17 @@ def chrome_status(address: str) -> tuple[bool, str]:
         return False, f"La sesion de Chrome no responde en {address}: {exc}"
 
 
+# Recien encendida la PC, Chrome tarda en responder; 20 segundos no alcanzaban
+# (22 de octubre: dos publicaciones bloqueadas a las 9:40).
+CHROME_START_SECONDS = 90
+# Si Chrome no abre, la publicacion se pospone en vez de bloquearse.
+BROWSER_RETRY_MINUTES = 15
+# Una vuelta del trabajador (publicar, leer anuncios, sincronizar) dura minutos.
+# Si pasa de esto esta trabado: se escribe donde y se cierra para que la tarea de
+# Windows lo vuelva a levantar (el 23 de octubre quedo 13 horas detenido).
+TICK_LIMIT_SECONDS = 40 * 60
+NETWORK_TIMEOUT_SECONDS = 120
+
 # Chrome que abrio el propio trabajador: se cierra al terminar para liberar
 # memoria (cada cuenta ocupa ~800 MB). Uno que ya estaba abierto (lo abrio la
 # persona para responder mensajes) no se toca.
@@ -129,7 +140,7 @@ def ensure_chrome(account_key: str, account: dict[str, Any]) -> tuple[bool, str]
         command.extend(["-ProfileDir", profile])
     creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     subprocess.Popen(command, cwd=str(SCRATCH_DIR), creationflags=creation_flags)
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + CHROME_START_SECONDS
     while time.monotonic() < deadline:
         time.sleep(2)
         ok, detail = chrome_status(address)
@@ -159,7 +170,7 @@ def preflight(item: dict[str, Any], config: dict[str, Any]) -> tuple[bool, str, 
     else:
         browser_ok, browser_detail = ensure_chrome(item["account"], account)
         if not browser_ok:
-            return False, "SESSION_BLOCKED", browser_detail
+            return False, "BROWSER_NOT_READY", browser_detail
     job = item.get("job") or {}
     source = resolve_path(job.get("source_excel") or job.get("excel"))
     images = resolve_path(job.get("images_root"))
@@ -489,6 +500,14 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
         return
 
     ok, error_code, detail = preflight(item, config)
+    if not ok and error_code == "BROWSER_NOT_READY":
+        # Chrome no abrio a tiempo: no es un problema del anuncio, se reintenta.
+        retry_at = datetime.now() + timedelta(minutes=BROWSER_RETRY_MINUTES)
+        store.finish_attempt(attempt_id, "retry", error_code, detail)
+        store.postpone(queue_id, retry_at.isoformat(timespec="seconds"), f"Chrome no respondio; se reintenta. {detail}")
+        store.create_alert("warning", error_code, detail, item["account"], queue_id)
+        log(f"Chrome no respondio para {item['name']} | cuenta={item['account']}; se reintenta a las {retry_at:%H:%M}")
+        return
     if not ok:
         store.finish_attempt(attempt_id, "blocked", error_code, detail)
         store.update_queue_item(queue_id, status="blocked", detail=detail, finished_at=now_iso())
@@ -670,6 +689,18 @@ WORKER_PID_PATH = SCRATCH_DIR / "marketplace_scheduler_worker.pid"
 _INSTANCE_LOCK = None
 
 
+def arm_hang_guard(limit: int = TICK_LIMIT_SECONDS) -> bool:
+    """Reinicia la cuenta regresiva: si la vuelta no termina a tiempo, se vuelca la
+    pila de cada hilo en el registro y el proceso se cierra."""
+    import faulthandler
+
+    try:
+        faulthandler.dump_traceback_later(limit, exit=True, file=sys.stderr)
+    except (AttributeError, ValueError, OSError):
+        return False  # sin un archivo real para escribir (por ejemplo, sin consola)
+    return True
+
+
 def acquire_single_instance() -> bool:
     """Impide dos trabajadores a la vez (la tarea de Windows y el panel pueden lanzar uno cada uno)."""
     global _INSTANCE_LOCK
@@ -715,6 +746,9 @@ def main() -> None:
     parser.add_argument("--poll-seconds", type=int, default=30)
     args = parser.parse_args()
     store = MarketplaceStore(args.db)
+    import socket
+
+    socket.setdefaulttimeout(NETWORK_TIMEOUT_SECONDS)
     if not acquire_single_instance():
         log("Ya hay otro trabajador corriendo; este se cierra para no duplicar el calendario.")
         return
@@ -725,6 +759,7 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001 - sin historial los limites arrancan en cero.
         log(f"No pude cargar el historial de publicaciones: {exc}")
     while True:
+        arm_hang_guard()
         try:
             worked = run_once(store)
         except KeyboardInterrupt:

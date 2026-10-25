@@ -318,3 +318,35 @@ def test_cerrar_chrome_se_conecta_sin_origin(monkeypatch):
     assert worker.close_chrome("127.0.0.1:9222") is True
     assert pedidos["opciones"]["suppress_origin"] is True
     assert pedidos["enviado"]["method"] == "Browser.close"
+
+
+def test_si_chrome_no_abre_la_publicacion_se_pospone_no_se_bloquea(store, monkeypatch):
+    import marketplace_scheduler_worker as worker
+    from conftest import enqueue_job
+
+    queue_id = enqueue_job(store, scheduled_at="2020-01-01T09:00:00")
+    monkeypatch.setattr(worker, "check_can_publish", lambda store, account: (True, "", "", ""))
+    monkeypatch.setattr(worker, "preflight", lambda item, cfg: (False, "BROWSER_NOT_READY", "Chrome no responde"))
+    worker.run_item(store, store.claim_due(), {"mode": "autonomous", "retry_delay_minutes": 30})
+    item = store.get_queue_item(queue_id)
+    assert item["status"] == "queued" and item["next_attempt_at"] > "2020"
+    assert [alert["code"] for alert in store.list_alerts()] == ["BROWSER_NOT_READY"]
+
+
+def test_una_vuelta_trabada_deja_la_pila_en_el_registro_y_cierra(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = tmp_path / "trabado.py"
+    script.write_text(
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "import marketplace_scheduler_worker as w\n"
+        "w.arm_hang_guard(1)\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60)
+    assert result.returncode != 0
+    assert "Timeout" in result.stderr and "trabado.py" in result.stderr
