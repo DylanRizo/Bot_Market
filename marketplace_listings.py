@@ -774,44 +774,56 @@ def action_allowed(store: MarketplaceStore, account: str, action: str) -> tuple[
 
 # Cada tarjeta se identifica por la linea "N clicks on listing"; se sube hasta el
 # contenedor mas pequeno con imagen, precio y una sola linea de clics.
-SCAN_JS = r"""
+FIND_CARDS_JS = r"""
 const CLICS = /\d[\d,.]*\s+(clicks?|clics?)\b/gi;
 const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('');
 const count = t => (String(t || '').match(CLICS) || []).length;
-const leaves = [...document.querySelectorAll('div, span')].filter(el => /\d\s+(clicks?|clics?)\b/i.test(own(el)));
-const out = [];
-const seen = new Set();
-for (const leaf of leaves) {
-  let card = leaf;
-  for (let i = 0; i < 15 && card; i++, card = card.parentElement) {
-    if (card.querySelector('img') && count(card.innerText) === 1 && /(NIO|C\$)\s?\d/.test(card.innerText)) break;
+const findCards = () => {
+  const leaves = [...document.querySelectorAll('div, span')].filter(el => /\d\s+(clicks?|clics?)\b/i.test(own(el)));
+  const cards = [];
+  const seen = new Set();
+  for (const leaf of leaves) {
+    let card = leaf;
+    for (let i = 0; i < 15 && card; i++, card = card.parentElement) {
+      if (card.querySelector('img') && count(card.innerText) === 1 && /(NIO|C\$)\s?\d/.test(card.innerText)) break;
+    }
+    if (!card || seen.has(card)) continue;
+    seen.add(card);
+    cards.push(card);
   }
-  if (!card || seen.has(card)) continue;
-  seen.add(card);
-  out.push({
-    texto: card.innerText,
-    hrefs: [...card.querySelectorAll('a[href]')].map(a => a.getAttribute('href')),
-    botones: [...card.querySelectorAll('[role="button"]')].map(b => (b.getAttribute('aria-label') || b.innerText || '').trim()).filter(Boolean),
-  });
-}
-return out;
+  return cards;
+};
 """
 
+SCAN_JS = FIND_CARDS_JS + r"""
+return findCards().map(card => ({
+  texto: card.innerText,
+  hrefs: [...card.querySelectorAll('a[href]')].map(a => a.getAttribute('href')),
+  botones: [...card.querySelectorAll('[role="button"]')].map(b => (b.getAttribute('aria-label') || b.innerText || '').trim()).filter(Boolean),
+}));
+"""
+
+# El boton se busca dentro de la tarjeta del anuncio, no por el titulo en toda la
+# pagina: con dos anuncios del mismo titulo y distinta fecha se tocaba el otro (el
+# 18 y el 30 de octubre se borro el equivocado), y Facebook guarda algunos titulos
+# con espacios dobles que la tarjeta muestra como uno (leggins, 25 de octubre).
 # Facebook dibuja dos botones con la misma etiqueta por anuncio y uno esta
 # oculto; pulsar el oculto no abre nada (asi fallo "eliminar" el 4 de octubre).
-FIND_BUTTON_JS = r"""
-const wanted = arguments[0].toLowerCase();
-const matches = [...document.querySelectorAll('[role="button"][aria-label]')]
-  .filter(b => b.getAttribute('aria-label').trim().toLowerCase() === wanted);
+CARD_BUTTON_JS = FIND_CARDS_JS + r"""
+const card = findCards()[arguments[0]];
+if (!card) return null;
+const norm = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+const wanted = norm(arguments[1]) + ' ';
 const visible = b => {
   const r = b.getBoundingClientRect();
   const st = getComputedStyle(b);
   return r.width > 1 && r.height > 1 && st.visibility !== 'hidden' && st.display !== 'none';
 };
-const shown = matches.filter(visible);
-const button = shown[0] || matches[0] || null;
+const matches = [...card.querySelectorAll('[role="button"][aria-label]')]
+  .filter(b => norm(b.getAttribute('aria-label')).startsWith(wanted));
+const button = matches.filter(visible)[0] || matches[0] || null;
 if (button) button.scrollIntoView({block: 'center'});
-return button;
+return button ? [button, card.innerText] : null;
 """
 
 MENU_ITEM_JS = r"""
@@ -882,6 +894,11 @@ def _card_matches(raw: dict[str, Any], title: str, listed_on: str) -> bool:
     return bool(card) and plain(card["title"]) == plain(title) and (not listed_on or card["listed_on"] == listed_on)
 
 
+def _matching_cards(cards: list[dict[str, Any]], title: str, listed_on: str) -> list[int]:
+    """Posiciones de las tarjetas con este titulo y esta fecha."""
+    return [index for index, raw in enumerate(cards) if _card_matches(raw, title, listed_on)]
+
+
 def act_in_browser(debugger_address: str, title: str, listed_on: str, action: str) -> str:
     """Ejecuta una accion sobre un anuncio y comprueba el resultado."""
     import facebook_marketplace_browser_automator as fb
@@ -891,12 +908,11 @@ def act_in_browser(debugger_address: str, title: str, listed_on: str, action: st
     original = driver.current_window_handle
     driver.switch_to.new_window("tab")
     try:
-        cards = _open_selling(driver)
-        matches = sum(1 for raw in cards if _card_matches(raw, title, listed_on))
+        matches = _matching_cards(_open_selling(driver), title, listed_on)
         if not matches:
             raise RuntimeError("No encontre el anuncio en Tus anuncios; puede que ya no exista.")
-        if matches > 1:
-            # Los botones se buscan por el titulo: con dos iguales se tocaria cualquiera.
+        if len(matches) > 1:
+            # Con el mismo titulo y la misma fecha no hay como saber cual es cual.
             raise RuntimeError("Hay dos anuncios iguales (mismo titulo y fecha); hazlo a mano en Facebook.")
 
         def current_state() -> list[dict[str, Any]]:
@@ -906,8 +922,22 @@ def act_in_browser(debugger_address: str, title: str, listed_on: str, action: st
             found = [parse_card(raw, today) for raw in refreshed]
             return [card for card in found if card and plain(card["title"]) == plain(title)]
 
+        def find(label: str):
+            """El boton de la tarjeta de este anuncio, no de otro con el mismo titulo."""
+            found = _matching_cards(driver.execute_script(SCAN_JS), title, listed_on)
+            if len(found) != 1:
+                raise RuntimeError("El anuncio ya no esta en Tus anuncios o hay dos iguales.")
+            result = driver.execute_script(CARD_BUTTON_JS, found[0], label)
+            if not result:
+                return None
+            button, text = result
+            # La pagina puede cargar mas anuncios entre las dos lecturas.
+            if not _card_matches({"texto": text, "hrefs": [], "botones": []}, title, listed_on):
+                raise RuntimeError("La pagina cambio mientras buscaba el anuncio; se intenta otra vez mas tarde.")
+            return button
+
         def press(label: str) -> None:
-            button = driver.execute_script(FIND_BUTTON_JS, f"{label} {title}")
+            button = find(label)
             if button is None:
                 raise RuntimeError(f"Facebook no ofrece '{label}' para este anuncio ahora mismo.")
             fb.click_like_a_person(driver, button)
@@ -931,7 +961,7 @@ def act_in_browser(debugger_address: str, title: str, listed_on: str, action: st
         if action == "mark_out_of_stock":
             press("Mark out of stock")
         elif action == "mark_available":
-            if driver.execute_script(FIND_BUTTON_JS, f"Mark as in stock {title}") is not None:
+            if find("Mark as in stock") is not None:
                 press("Mark as in stock")
             else:
                 menu(["Mark as available", "Marcar como disponible"])

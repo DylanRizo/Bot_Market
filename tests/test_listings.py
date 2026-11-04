@@ -342,3 +342,60 @@ def test_todos_los_nombres_del_redactor_vuelven_a_su_familia():
         for nombre in perfil.names:
             titulo = nombre.format(extra=" 15-20 mmHg") + " - Negro"
             assert listings.family_for_title(titulo) == familia, titulo
+
+
+# --- botones en Facebook ------------------------------------------------------
+
+class PaginaFalsa:
+    """Tus anuncios de mentira: responde a los scripts del bot con tarjetas fijas."""
+
+    def __init__(self, cards):
+        self.cards = cards
+        self.pedidos = []
+        self.current_window_handle = "principal"
+        nada = lambda *a, **k: None  # noqa: E731
+        self.switch_to = type("Cambio", (), {"new_window": nada, "window": nada})()
+
+    def execute_script(self, script, *args):
+        if script == listings.SCAN_JS:
+            return list(self.cards)
+        if script == listings.CARD_BUTTON_JS:
+            indice, etiqueta = args
+            self.pedidos.append((indice, etiqueta))
+            return [f"boton:{indice}", self.cards[indice]["texto"]]
+        if script == listings.MENU_ITEM_JS:
+            return {"item": "eliminar", "text": "Delete listing"}
+        return None
+
+    def close(self):
+        pass
+
+
+def test_borrar_toca_el_anuncio_de_la_fecha_pedida_aunque_otro_se_llame_igual(monkeypatch):
+    # 18 y 30 de octubre: el agotado viejo y otro anuncio se llamaban igual y el
+    # bot borro el otro, porque buscaba el boton solo por el titulo.
+    import facebook_marketplace_browser_automator as fb
+
+    titulo = "Camisa de compresion/Slimfit/camiseta deportiva, nueva"
+    pagina = PaginaFalsa([tarjeta(titulo, fecha="8/4"), tarjeta(titulo, estado="Out of Stock", fecha="3/11")])
+    viejo = listings.parse_card(pagina.cards[1], date.today())["listed_on"]
+    abierto = {}
+
+    def tocar(driver, elemento):
+        if str(elemento).startswith("boton:"):
+            abierto["indice"] = int(str(elemento).split(":")[1])
+
+    def confirmar(driver, etiqueta, timeout=10):
+        pagina.cards.pop(abierto["indice"])
+        return True
+
+    monkeypatch.setattr(fb, "click_like_a_person", tocar)
+    monkeypatch.setattr(fb, "click_button", confirmar)
+    monkeypatch.setattr(fb, "check_account_restriction", lambda driver: None)
+    monkeypatch.setattr(listings, "_driver", lambda address: pagina)
+    monkeypatch.setattr(listings, "_open_selling", lambda driver: list(pagina.cards))
+    monkeypatch.setattr(listings.time, "sleep", lambda segundos: None)
+
+    assert "hecho" in listings.act_in_browser("127.0.0.1:1", titulo, viejo, "delete")
+    assert pagina.pedidos == [(1, "More options for")]
+    assert [listings.parse_card(c, date.today())["status"] for c in pagina.cards] == ["in_stock"]
