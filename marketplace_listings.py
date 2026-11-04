@@ -721,6 +721,17 @@ def republish_requests(store: MarketplaceStore) -> dict[tuple[str, str], str]:
     return {(row["account"], row["family_key"]): str(row["finished_at"]) for row in rows}
 
 
+def active_listing(store: MarketplaceStore, account: str, family: str) -> dict[str, Any] | None:
+    """El anuncio activo (o pendiente de entrega) de ese producto en la cuenta, segun la ultima lectura."""
+    if not family:
+        return None
+    return next(
+        (item for item in list_listings(store, account)
+         if item["family_key"] == family and item["status"] in {"in_stock", "pending"}),
+        None,
+    )
+
+
 def recent_actions(store: MarketplaceStore, limit: int = 30) -> list[dict[str, Any]]:
     ensure_schema(store)
     with store.connect() as connection:

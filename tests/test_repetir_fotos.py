@@ -69,6 +69,32 @@ def test_sin_revision_de_la_cuenta_no_se_arriesga(store, photo):
     assert scheduler.reuse_check(store, "cuenta1", "bolsos", [foto], load_safety(store))[0] is False
 
 
+def test_fotos_nuevas_no_se_publican_si_la_cuenta_ya_tiene_el_producto_activo(store, photo):
+    # Dylan Steven, 27 de octubre: fotos nuevas en la cuenta, pero ya tenia tres
+    # anuncios activos de medias de compresion y salio un cuarto.
+    revisar_anuncios(store, "cuenta1", tarjeta("Bolso deportivo - Negro", "In stock", "9/1"))
+    assert scheduler.reuse_check(store, "cuenta1", "bolsos", [photo()], load_safety(store)) == (False, None)
+    revisar_anuncios(store, "cuenta1", tarjeta("Bolso deportivo - Negro", "Out of Stock", "9/1"))
+    assert scheduler.reuse_check(store, "cuenta1", "bolsos", [photo()], load_safety(store)) == (True, None)
+
+
+def test_el_trabajador_no_publica_si_la_cuenta_ya_tiene_el_producto_activo(store, photo, monkeypatch):
+    revisar_anuncios(store, "cuenta1", tarjeta("Bolso deportivo - Negro", "In stock", "9/1"))
+    queue_id = enqueue_job(store, scheduled_at="2020-01-01T09:00:00", family_key="bolsos", dedupe_key="ya-activo",
+                           job={"name": "Bolsos", "family_key": "bolsos",
+                                "listing_overrides": {"image_paths": [str(photo())]}})
+    publicado = []
+    monkeypatch.setattr(worker, "ensure_chrome", lambda key, account: (True, "ok"))
+    monkeypatch.setattr(worker, "check_can_publish", lambda store, account: (True, "", "", ""))
+    monkeypatch.setattr(worker, "preflight", lambda item, cfg: (True, "", "ok"))
+    monkeypatch.setattr(worker, "campaign_for_item", lambda item, cfg: "campana.json")
+    monkeypatch.setattr(worker.subprocess, "run", lambda *a, **k: publicado.append(a))
+    worker.run_item(store, store.claim_due(), {"mode": "autonomous", "retry_delay_minutes": 30})
+    item = store.get_queue_item(queue_id)
+    assert item["status"] == "skipped" and "ya tiene activo" in item["detail"]
+    assert not publicado
+
+
 def test_el_calendario_deja_la_repeticion_por_aprobar_aunque_sea_autonomo(store, photo, monkeypatch):
     fotos = [photo("a"), photo("b")]
     usar_fotos(store, "cuenta1", fotos, hace_dias=20)

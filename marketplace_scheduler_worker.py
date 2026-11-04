@@ -477,6 +477,21 @@ def run_item(store: MarketplaceStore, item: dict[str, Any], config: dict[str, An
         store.update_queue_item(queue_id, status="skipped", detail=detail, finished_at=now_iso())
         log(f"Omitido por fotos ya usadas: {item['name']} | cuenta={item['account']}")
         return
+    if publishing:
+        import marketplace_listings
+
+        # Fotos nuevas, pero la cuenta ya tiene un anuncio activo del producto
+        # (subido a mano o despues de armar el calendario): otro seria un duplicado.
+        active = marketplace_listings.active_listing(store, item["account"], str(item.get("family_key") or ""))
+        if active:
+            detail = (
+                f"La cuenta {item['account']} ya tiene activo \"{active['title']}\" (del {active['listed_on']}). "
+                "Otro anuncio del mismo producto seria un duplicado."
+            )
+            store.finish_attempt(attempt_id, "skipped", "ALREADY_LISTED", detail)
+            store.update_queue_item(queue_id, status="skipped", detail=detail, finished_at=now_iso())
+            log(f"Omitido porque ya tiene anuncio activo: {item['name']} | cuenta={item['account']}")
+            return
 
     ok, gate_code, gate_detail = sgi_gate(store, item)
     if not ok:

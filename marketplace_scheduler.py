@@ -292,15 +292,19 @@ def reuse_check(
     """Si se puede publicar en la cuenta un producto con estas fotos.
 
     Devuelve (permitido, informacion de repeticion). Fotos nuevas en la cuenta:
-    (True, None). Fotos ya usadas: solo despues de ``reuse_days`` y si la ultima
+    (True, None) si no tiene ya un anuncio activo del producto. Fotos ya usadas: solo despues de ``reuse_days`` y si la ultima
     revision de "Tus anuncios" no muestra un anuncio activo de ese producto; la
     informacion trae el anuncio agotado que habria que borrar antes de volver a
     subirlo. Sin revision de esa cuenta no se arriesga.
     """
+    import marketplace_listings
+
     conflicts = store.media_conflicts(account, list(images))
     if not conflicts:
-        return True, None
-    import marketplace_listings
+        # Fotos nuevas para la cuenta, pero si ya tiene un anuncio activo del
+        # producto (subido a mano o con otras fotos) seria otro igual: el 27 de
+        # octubre Dylan Steven quedo con cuatro anuncios de medias de compresion.
+        return marketplace_listings.active_listing(store, account, family) is None, None
 
     current = now or datetime.now()
     last = max(datetime.fromisoformat(str(row["used_at"])) for row in conflicts)
@@ -315,9 +319,9 @@ def reuse_check(
     if scan.get("status") != "ok":
         return False, None
 
-    same = [item for item in marketplace_listings.list_listings(store, account) if item["family_key"] == family]
-    if any(item["status"] in {"in_stock", "pending"} for item in same):
+    if marketplace_listings.active_listing(store, account, family):
         return False, None
+    same = [item for item in marketplace_listings.list_listings(store, account) if item["family_key"] == family]
     old = sorted((item for item in same if item["status"] == "out_of_stock"), key=lambda item: item["listed_on"])
     replace = old[-1] if old else None
     return True, {
