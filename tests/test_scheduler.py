@@ -232,6 +232,32 @@ def test_generate_week_en_modo_supervisado_no_aprueba_nada(store, catalogo):
         assert item["approved"] is False
 
 
+def test_una_propuesta_vencida_sin_aprobar_se_cancela_y_se_vuelve_a_proponer(store, catalogo):
+    # Del 31 de octubre al 3 de noviembre dos propuestas sin aprobar de dias
+    # pasados seguian apartando sus fotos y el calendario quedo vacio.
+    from conftest import enqueue_job
+
+    familia = catalogo(familias=1)[0]
+    ayer = (datetime.now() - timedelta(days=1)).replace(hour=15, minute=0, second=0, microsecond=0)
+    vieja = enqueue_job(store, scheduled_at=ayer.isoformat(), family_key="familia0", status="planned", approved=False,
+                        dedupe_key="vencida", fingerprint="huella-vencida", job=dict(familia))
+    config = base_config(mode="semiautomatic", horizon_days=1, max_per_day=1, cooldown_days=0)
+    resultado = generate_week(store, config, start_date=date.today() + timedelta(days=1))
+    assert resultado["expired"] == 1 and resultado["created"] == 1
+    assert store.get_queue_item(vieja)["status"] == "cancelled"
+    nueva = [item for item in store.list_queue(statuses=["planned"]) if item["id"] != vieja]
+    assert [item["family_key"] for item in nueva] == ["familia0"]
+
+
+def test_una_propuesta_de_hoy_sin_aprobar_no_se_cancela(store):
+    from conftest import enqueue_job
+
+    hoy = datetime.now().replace(hour=0, minute=1, second=0, microsecond=0)
+    propuesta = enqueue_job(store, scheduled_at=hoy.isoformat(), status="planned", approved=False)
+    assert scheduler.expire_unapproved(store) == 0
+    assert store.get_queue_item(propuesta)["status"] == "planned"
+
+
 def test_generate_week_falla_claro_si_no_hay_productos(store, monkeypatch):
     monkeypatch.setattr(scheduler, "build_family_jobs", lambda *a, **k: [])
     monkeypatch.setattr(scheduler, "custom_rotation_jobs", lambda *a, **k: [])

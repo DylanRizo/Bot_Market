@@ -390,6 +390,10 @@ def _generate_week(
     if not slots:
         raise RuntimeError("No hay espacios futuros dentro de los dias y horarios configurados.")
 
+    # Una propuesta sin aprobar de un dia que ya paso no se publica, pero seguia
+    # apartando sus fotos: del 31 de octubre al 3 de noviembre dos asi dejaron el
+    # calendario vacio. Se cancela y el producto se vuelve a proponer.
+    expired = expire_unapproved(store)
     last_used: dict[tuple[str, str], datetime] = {}
     for account in config["accounts"]:
         for family, value in store.recent_family_publications(account).items():
@@ -534,6 +538,7 @@ def _generate_week(
         "ids": created,
         "available_slots": len(slots),
         "skipped_slots": skipped_slots,
+        "expired": expired,
         "families": len(jobs),
         "config": config,
     }
@@ -552,6 +557,20 @@ def approve_items(store: MarketplaceStore, ids: list[str] | None = None, include
         if not include_reuse and reuse and not reuse.get("requested"):
             continue
         if store.update_queue_item(item["id"], status="queued", approved=True):
+            changed += 1
+    return changed
+
+
+def expire_unapproved(store: MarketplaceStore, today: date | None = None) -> int:
+    """Cancela las propuestas sin aprobar de dias anteriores a hoy."""
+    limit = (today or date.today()).isoformat()
+    changed = 0
+    for item in store.list_queue(statuses=["planned"], limit=2000):
+        if item["approved"] or str(item.get("scheduled_at") or "") >= limit:
+            continue
+        if store.update_queue_item(
+            item["id"], status="cancelled", detail="Vencida sin aprobar: el calendario nuevo la vuelve a proponer."
+        ):
             changed += 1
     return changed
 
