@@ -325,6 +325,8 @@ def test_copia_escondida_frente_a_otra_cuenta_se_propone_borrar(store):
 @pytest.mark.parametrize("titulo, familia", [
     ("Calcetas con diseños divertidos (Multicolor)", "calcetas_multicolor"),
     ("Medias de compresión 15-20 mmHg tallas S a XL en Beige y Negro", "calcetas"),
+    ("Camisa de compresión Bersek: Negro y Blanco, tallas M, L", "bershka"),
+    ("Camisa Bersek: Negro y Blanco, tallas M, L", "bershka"),
     ("Maletín deportivo (Negro)", "bolsos"),
     ("Manga deportiva para brazo - Negro", "mangas_brazo"),
     ("Correas de levantamiento | Verde", "straps"),

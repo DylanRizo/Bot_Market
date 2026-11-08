@@ -61,6 +61,22 @@ def test_los_datos_no_cambian(cuenta):
     assert len(copia.title) <= 99
 
 
+@pytest.mark.parametrize("cuenta", CUENTAS)
+def test_bersek_se_anuncia_como_camisa_de_compresion(cuenta):
+    copia = texto("Camisa Bersek", ["Negro", "Blanco"], ["M", "L"], precio=350, familia="bershka",
+                  semilla=f"{cuenta}|bershka|2026-11-09|q")
+    assert "compresión" in copia.title.lower(), copia.title
+    assert "Bersek" in copia.title
+
+
+@pytest.mark.parametrize("cuenta", CUENTAS)
+def test_las_medias_de_compresion_no_se_anuncian_como_calcetas(cuenta):
+    copia = texto("Calcetas de compresion 15-20 mmHg", ["Beige", "Negro"], ["S", "M", "L", "XL"], precio=400,
+                  familia="calcetas", semilla=f"{cuenta}|calcetas|2026-11-09|q")
+    assert copia.title.startswith("Medias"), copia.title
+    assert "calcetas" not in copia.description.lower(), copia.description
+
+
 def test_sin_semilla_el_texto_es_siempre_el_mismo():
     assert texto("Durag", ["Negro", "Rojo"], [], familia="durags") == texto("Durag", ["Negro", "Rojo"], [], familia="durags")
 

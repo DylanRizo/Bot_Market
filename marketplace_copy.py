@@ -92,13 +92,13 @@ PROFILES: dict[str, Profile] = {
     ),
     "bershka": _p(
         "camisa bersek",
-        ["Camisa Bersek", "Camisa marca Bersek"],
+        ["Camisa de compresión Bersek", "Camisa Bersek de compresión"],
         "f", False,
         ["{N} {nueva}, con estilo para el gym o para salir.",
-         "Llegaron camisas Bersek {nuevas}, listas para estrenar.",
+         "Llegaron camisas de compresión Bersek {nuevas}, listas para estrenar.",
          "{N} {nueva} para completar tu outfit."],
         ["Combina con jeans, joggers o shorts.", "Para el día a día o para entrenar."],
-        ["camisa Bersek", "Bersek", "ropa de hombre", "estilo urbano", "camisa", "outfit"],
+        ["camisa de compresión", "camisa Bersek", "Bersek", "ropa de hombre", "estilo urbano", "camisa", "outfit"],
     ),
     "chalecos": _p(
         "chaleco de lana sin mangas",
@@ -245,13 +245,13 @@ PROFILES: dict[str, Profile] = {
     ),
     "calcetas": _p(
         "calcetas de compresion",
-        ["Calcetas de compresión{extra}", "Medias de compresión{extra}", "Calcetas de compresión altas{extra}"],
+        ["Medias de compresión{extra}", "Medias de compresión altas{extra}", "Medias altas de compresión{extra}"],
         "f", True,
         ["{N} {nuevas}, ideales para largas jornadas de pie o sentado.",
          "¿Pasas muchas horas de pie? Tenemos {un}{n} {nuevas}.",
          "{N} {nuevas}, para descanso y confort en el día a día."],
         ["Para el trabajo, viajes largos o después de entrenar.", "Ideales si trabajas muchas horas de pie."],
-        ["calcetas de compresión", "medias de compresión", "medias de descanso", "compresión",
+        ["medias de compresión", "calcetas de compresión", "medias de descanso", "compresión",
          "calcetas altas", "salud y bienestar"],
     ),
     "calcetas_multicolor": _p(
