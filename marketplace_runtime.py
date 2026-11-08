@@ -9,6 +9,8 @@ from typing import Any
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 LOCKS_DIR = SCRATCH_DIR / "marketplace_runtime_locks"
+# Holgura por si el reloj de Windows se ajusta justo entre arrancar y escribir.
+PID_CLOCK_MARGIN_SECONDS = 60
 
 # La carpeta de fotos locales se llamaba "imagenes_firupost". Las instalaciones
 # que aun la conservan siguen funcionando; migrar_nombres_antiguos.py la renombra.
@@ -91,6 +93,53 @@ def _windows_process_exists(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+def _windows_process_started_at(pid: int) -> float | None:
+    """Cuando arranco el proceso, o None si Windows no deja abrirlo."""
+    import ctypes
+    from ctypes import wintypes
+
+    process_query_limited_information = 0x1000
+    # FILETIME cuenta intervalos de 100 ns desde 1601; time.time(), segundos desde 1970.
+    filetime_ticks_per_second = 10_000_000
+    seconds_from_1601_to_1970 = 11_644_473_600
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE, *[ctypes.POINTER(wintypes.FILETIME)] * 4)
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return None
+    try:
+        created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+        pointers = (ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user))
+        if not kernel32.GetProcessTimes(handle, *pointers):
+            return None
+        ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+        return ticks / filetime_ticks_per_second - seconds_from_1601_to_1970
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def process_wrote(pid: int, written_at: float) -> bool:
+    """Si ``pid`` sigue siendo el proceso que dejo su numero en ``written_at``.
+
+    Windows reutiliza los numeros: al reiniciar la PC el 5 de noviembre el 2924 del
+    trabajador paso a un proceso del sistema, el candado viejo parecia vivo y el bot
+    estuvo parado tres dias. Un proceso que arranco despues de escribirse el numero
+    no es el mismo, y uno que Windows no deja abrir es del sistema o de otro usuario.
+    """
+    if not process_exists(pid):
+        return False
+    if os.name != "nt":
+        return True
+    started = _windows_process_started_at(pid)
+    return started is not None and started <= written_at + PID_CLOCK_MARGIN_SECONDS
+
+
 class AccountLock:
     """Small cross-process lock that prevents two publishers using one profile."""
 
@@ -104,9 +153,10 @@ class AccountLock:
         try:
             payload: dict[str, Any] = json.loads(self.path.read_text(encoding="utf-8"))
             pid = int(payload.get("pid") or 0)
+            written_at = float(payload.get("created_at") or 0)
         except Exception:
-            pid = 0
-        if not process_exists(pid):
+            pid, written_at = 0, 0.0
+        if not process_wrote(pid, written_at):
             try:
                 self.path.unlink()
             except FileNotFoundError:

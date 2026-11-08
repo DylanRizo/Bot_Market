@@ -27,7 +27,7 @@ from marketplace_catalog import ASSISTANT_PRESETS, STYLE_TO_MODE
 from marketplace_custom_products import CUSTOM_ROOT, create_custom_product
 import marketplace_listings as listings_module
 from marketplace_listing_worker import request_scan, scan_state_key
-from marketplace_runtime import IMAGES_DIR_NAME, images_root, process_exists
+from marketplace_runtime import IMAGES_DIR_NAME, images_root, process_exists, process_wrote
 from marketplace_safety import (
     LEVELS as SAFETY_LEVELS,
     backfill_events,
@@ -172,7 +172,9 @@ def expand_env(text: str) -> str:
 
 def worker_pid() -> int:
     try:
-        return int(WORKER_PID_PATH.read_text(encoding="utf-8").strip())
+        pid = int(WORKER_PID_PATH.read_text(encoding="utf-8").strip())
+        # Un numero viejo puede ser hoy otro proceso, y "Detener" lo cerraria.
+        return pid if process_wrote(pid, WORKER_PID_PATH.stat().st_mtime) else 0
     except Exception:
         return 0
 
