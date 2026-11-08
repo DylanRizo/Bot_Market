@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import marketplace_leads as leads
 import marketplace_listings as listings
 from marketplace_runtime import AccountLock
 from marketplace_safety import record_publication, register_outcome
@@ -30,6 +31,7 @@ from marketplace_storage import MarketplaceStore
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 LISTINGS_SCRIPT = SCRATCH_DIR / "marketplace_listings.py"
+LEADS_SCRIPT = SCRATCH_DIR / "marketplace_leads.py"
 SGI_REPORT_PATH = SCRATCH_DIR / "sgi_sync_report.json"
 
 SCAN_EVERY_SECONDS = 20 * 60 * 60
@@ -141,6 +143,28 @@ def scan_account(
         "status": "ok", "attempted_at_epoch": started, "listings": result["saved"],
         "scanned_at": datetime.now().isoformat(timespec="seconds"),
     })
+    return {"ok": True, **result}
+
+
+def scan_leads(
+    store: MarketplaceStore,
+    account: str,
+    address: str,
+    run: Callable[[list[str]], tuple[int, str]] = _run,
+) -> dict[str, Any]:
+    """Cuenta los interesados de la bandeja. Si falla, la lectura de anuncios sigue valiendo."""
+    try:
+        with AccountLock(account, timeout_seconds=5):
+            code, output = run([sys.executable, str(LEADS_SCRIPT), "scan", "--debugger-address", address])
+    except RuntimeError as exc:
+        return {"ok": False, "code": "ACCOUNT_BUSY", "detail": str(exc)}
+    match = re.search(r"\[leads-json\](.*)", output)
+    if code != 0 or not match:
+        error_code, detail = _error(output)
+        store.heartbeat(f"leads_scan:{account}", {"status": "error", "code": error_code, "detail": detail})
+        return {"ok": False, "code": error_code, "detail": detail}
+    result = leads.save_rows(store, account, json.loads(match.group(1)))
+    store.heartbeat(f"leads_scan:{account}", {"status": "ok", **result})
     return {"ok": True, **result}
 
 
@@ -263,6 +287,12 @@ def run_listing_work(
         queued = queue_automatic_actions(store)
         if result.get("ok"):
             log(f"Anuncios leidos en {key}: {result['saved']}. Recomendaciones: {counts}. Automaticas en cola: {queued}.")
+            found = scan_leads(store, key, str(account.get("debugger_address") or ""), run)
+            if found.get("ok"):
+                log(f"Leads en {key}: {found['read']} conversaciones, {found['new']} nuevas, "
+                    f"{found['never_answered']} sin ninguna respuesta.")
+            else:
+                log(f"No pude leer la bandeja de {key}: {found.get('code')} {found.get('detail')}")
         else:
             log(f"No pude leer los anuncios de {key}: {result.get('code')} {result.get('detail')}")
         return True
