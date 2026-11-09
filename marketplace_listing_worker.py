@@ -45,6 +45,10 @@ def scan_state_key(account: str) -> str:
     return f"listings_scan:{account}"
 
 
+def leads_state_key(account: str) -> str:
+    return f"leads_scan:{account}"
+
+
 def action_state_key(account: str) -> str:
     return f"listings_action:{account}"
 
@@ -161,10 +165,10 @@ def scan_leads(
     match = re.search(r"\[leads-json\](.*)", output)
     if code != 0 or not match:
         error_code, detail = _error(output)
-        store.heartbeat(f"leads_scan:{account}", {"status": "error", "code": error_code, "detail": detail})
+        store.heartbeat(leads_state_key(account), {"status": "error", "code": error_code, "detail": detail})
         return {"ok": False, "code": error_code, "detail": detail}
     result = leads.save_rows(store, account, json.loads(match.group(1)))
-    store.heartbeat(f"leads_scan:{account}", {"status": "ok", **result})
+    store.heartbeat(leads_state_key(account), {"status": "ok", **result})
     return {"ok": True, **result}
 
 

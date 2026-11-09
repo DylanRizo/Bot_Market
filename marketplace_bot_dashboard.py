@@ -25,8 +25,9 @@ import pandas as pd
 
 from marketplace_catalog import ASSISTANT_PRESETS, STYLE_TO_MODE
 from marketplace_custom_products import CUSTOM_ROOT, create_custom_product
+import marketplace_leads as leads_module
 import marketplace_listings as listings_module
-from marketplace_listing_worker import request_scan, scan_state_key
+from marketplace_listing_worker import leads_state_key, request_scan, scan_state_key
 from marketplace_runtime import IMAGES_DIR_NAME, images_root, process_exists, process_wrote
 from marketplace_safety import (
     LEVELS as SAFETY_LEVELS,
@@ -317,6 +318,16 @@ def listings_payload() -> dict[str, Any]:
         "labels": listings_module.ACTION_LABELS,
         "rules": listings_module.RULES,
     }
+
+
+def leads_payload() -> dict[str, Any]:
+    accounts = json_load(ACCOUNTS_PATH, {"accounts": {}}).get("accounts", {})
+    report = leads_module.report(STORE)
+    labels = {key: preset["label"] for key, preset in ASSISTANT_PRESETS.items()}
+    for row in (*report["products"], *report["unanswered"]):
+        row["label"] = labels.get(row["family_key"], row["family_key"] or "Otros")
+    report["scans"] = {key: STORE.worker_state(leads_state_key(key)) for key in accounts}
+    return report
 
 
 def debug_status(address: str) -> dict[str, Any]:
@@ -967,6 +978,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/listings":
                 self.send_json({"ok": True, "listings": listings_payload()})
+                return
+            if self.path == "/api/leads":
+                self.send_json({"ok": True, "leads": leads_payload()})
                 return
             if self.path == "/api/autonomy":
                 self.send_json({"ok": True, "autonomy": autonomy_payload()})

@@ -84,6 +84,8 @@ AGE_DAYS = {"d": 1, "w": 7, "sem": 7, "y": 365, "a": 365}
 OWN_MESSAGE_PREFIXES = ("you:", "you sent", "you replied", "tu:", "enviaste", "respondiste")
 # Mientras nadie conteste, Facebook muestra este aviso en lugar del ultimo mensaje.
 FIRST_CONTACT_PHRASES = ("sent you a message about your listing", "te envio un mensaje sobre tu")
+# Los productos en los que se concentra la venta: el panel los pone primero.
+FOCUS_FAMILIES = ("calcetas", "compression_short", "bershka")
 
 
 def ensure_schema(store: MarketplaceStore) -> None:
@@ -162,6 +164,66 @@ def save_rows(store: MarketplaceStore, account: str, rows: list[dict[str, Any]])
         "new": new,
         "awaiting": sum(1 for row in rows if row["awaiting_reply"]),
         "never_answered": sum(1 for row in rows if row["never_answered"]),
+    }
+
+
+def report(store: MarketplaceStore, today: date | None = None) -> dict[str, Any]:
+    """Lo que muestra el panel. Solo consulta la base, no toca Facebook.
+
+    Los productos y los pendientes usan 14 dias, la misma ventana de los clics de Facebook.
+    """
+    today = today or date.today()
+    ensure_schema(store)
+    listings.ensure_schema(store)
+    since = {days: (today - timedelta(days=days)).isoformat() for days in (7, 14, 30)}
+    with store.connect() as connection:
+        accounts = connection.execute(
+            """SELECT account, COUNT(*) AS total, SUM(last_activity >= ?) AS last_7, SUM(last_activity >= ?) AS last_14,
+                      SUM(last_activity >= ?) AS last_30, SUM(never_answered = 1 AND last_activity >= ?) AS unanswered
+               FROM leads GROUP BY account ORDER BY account""",
+            (since[7], since[14], since[30], since[14]),
+        ).fetchall()
+        by_family = connection.execute(
+            "SELECT family_key, account, COUNT(*) AS leads FROM leads WHERE last_activity >= ? GROUP BY family_key, account",
+            (since[14],),
+        ).fetchall()
+        clicks = connection.execute(
+            """SELECT family_key, SUM(clicks_14d) AS clicks FROM listings
+               WHERE present = 1 AND status = 'in_stock' AND family_key <> '' GROUP BY family_key"""
+        ).fetchall()
+        unanswered = connection.execute(
+            """SELECT account, title, family_key, last_activity FROM leads
+               WHERE never_answered = 1 AND last_activity >= ? ORDER BY last_activity DESC, account""",
+            (since[14],),
+        ).fetchall()
+
+    leads_by_family: dict[str, dict[str, int]] = {}
+    for row in by_family:
+        leads_by_family.setdefault(row["family_key"], {})[row["account"]] = row["leads"]
+    clicks_by_family = {row["family_key"]: row["clicks"] or 0 for row in clicks}
+    products = []
+    for family in {*FOCUS_FAMILIES, *leads_by_family, *clicks_by_family}:
+        by_account = leads_by_family.get(family, {})
+        total = sum(by_account.values())
+        family_clicks = clicks_by_family.get(family, 0)
+        products.append({
+            "family_key": family,
+            "focus": family in FOCUS_FAMILIES,
+            "leads": total,
+            "by_account": by_account,
+            "clicks": family_clicks,
+            # Los clics son de los anuncios activos y los leads tambien de los ya borrados:
+            # con menos clics que leads el porcentaje no significaria nada.
+            "rate": round(100 * total / family_clicks) if family_clicks >= max(total, 1) else None,
+        })
+    focus_rank = {family: rank for rank, family in enumerate(FOCUS_FAMILIES)}
+    products.sort(key=lambda item: (focus_rank.get(item["family_key"], len(focus_rank)), -item["leads"], item["family_key"]))
+    return {
+        "accounts": [dict(row) for row in accounts],
+        "products": products,
+        "unanswered": [
+            {**dict(row), "age_days": (today - date.fromisoformat(row["last_activity"])).days} for row in unanswered
+        ],
     }
 
 

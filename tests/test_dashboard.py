@@ -64,7 +64,7 @@ def pedir(base, ruta, metodo="GET", headers=None, datos=None):
 
 def test_sin_token_todo_responde_401(panel):
     base, _, _ = panel
-    for ruta in ("/", "/api/state", "/api/autonomy", "/static/app.js"):
+    for ruta in ("/", "/api/state", "/api/autonomy", "/api/leads", "/static/app.js"):
         estado, _, _ = pedir(base, ruta)
         assert estado == 401, f"{ruta} deberia exigir la llave"
 
@@ -162,12 +162,19 @@ def test_no_se_puede_salir_de_la_carpeta_static(panel):
 
 # --- endpoints de lectura ----------------------------------------------------
 
-@pytest.mark.parametrize("ruta", ["/api/state", "/api/autonomy", "/api/activity", "/api/run/status"])
+@pytest.mark.parametrize("ruta", ["/api/state", "/api/autonomy", "/api/activity", "/api/run/status", "/api/leads"])
 def test_los_endpoints_de_lectura_responden_json(panel, ruta):
     base, token, _ = panel
     estado, cuerpo, _ = pedir(base, ruta, headers={"Cookie": f"mb_session={token}"})
     assert estado == 200
     assert json.loads(cuerpo)["ok"] is True
+
+
+def test_los_leads_llevan_el_nombre_del_producto(panel):
+    base, token, dashboard = panel
+    _, cuerpo, _ = pedir(base, "/api/leads", headers={"Cookie": f"mb_session={token}"})
+    primero = json.loads(cuerpo)["leads"]["products"][0]
+    assert primero["label"] == dashboard.ASSISTANT_PRESETS[primero["family_key"]]["label"]
 
 
 def test_el_panel_arranca_con_la_base_de_prueba_no_la_real(panel):
@@ -190,7 +197,7 @@ def test_el_frontend_no_llama_a_ninguna_ruta_inexistente(panel):
     _, _, dashboard = panel
     post = set(dashboard.DashboardHandler.POST_ROUTES)
     get = {"/api/state", "/api/activity", "/api/autonomy", "/api/run/status",
-           "/api/image", "/api/media", "/api/assistant/review", "/api/listings"}
+           "/api/image", "/api/media", "/api/assistant/review", "/api/listings", "/api/leads"}
     conocidas = post | get
     desconocidas = sorted(r for r in rutas_que_llama_el_frontend() if r not in conocidas)
     assert not desconocidas, f"el frontend llama a rutas que el servidor no tiene: {desconocidas}"

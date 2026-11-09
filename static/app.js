@@ -1553,6 +1553,8 @@
       return days === 0 ? "hoy" : days === 1 ? "1 día" : `${days} días`;
     }
 
+    const metric = (value, label) => `<div class="metric"><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span></div>`;
+
     function renderListings() {
       const items = listingsState.listings || [];
       const labels = listingsState.labels || {};
@@ -1565,7 +1567,6 @@
       const active = items.filter(item => item.status === "in_stock");
       const needs = items.filter(item => NEEDS_SOMETHING.has(item.recommendation));
       const clicks = active.reduce((sum, item) => sum + (item.clicks_14d || 0), 0);
-      const metric = (value, label) => `<div class="metric"><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span></div>`;
       $("listingsMetrics").innerHTML = [
         metric(active.length, "Anuncios activos"),
         metric(needs.length, "Necesitan algo"),
@@ -1660,11 +1661,76 @@
       }
     }
 
+    // --- Leads -------------------------------------------------------------------
+    let leadsState = { accounts: [], products: [], unanswered: [], scans: {} };
+
+    async function loadLeads() {
+      const payload = await api("/api/leads");
+      leadsState = payload.leads;
+      renderLeads();
+    }
+
+    function renderLeads() {
+      const accounts = Object.keys(state.accounts?.accounts || {});
+      const perAccount = Object.fromEntries((leadsState.accounts || []).map(row => [row.account, row]));
+      const sum = field => accounts.reduce((total, key) => total + (perAccount[key]?.[field] || 0), 0);
+      $("leadsMetrics").innerHTML = [
+        metric(sum("last_7"), "Con actividad en 7 días"),
+        metric(sum("last_14"), "Con actividad en 14 días"),
+        metric(sum("last_30"), "Con actividad en 30 días"),
+        metric(sum("total"), "Conversaciones leídas"),
+        metric(sum("unanswered"), "Sin ninguna respuesta (14 días)"),
+      ].join("");
+
+      const scans = leadsState.scans || {};
+      $("leadsScans").innerHTML = accounts.map(key => {
+        const scan = scans[key] || {};
+        const text = scan.status === "error" ? `error: ${scan.detail || scan.code || ""}` : scan.status === "ok" ? `última lectura ${shortDate(scan.updated_at)}` : "sin leer todavía";
+        return `<span class="scan-chip ${scan.status === "error" ? "warn-text" : ""}"><b>${escapeHtml(accountName(key))}</b> · ${escapeHtml(text)}</span>`;
+      }).join("");
+
+      const unanswered = leadsState.unanswered || [];
+      const anyRead = Object.keys(perAccount).length > 0;
+      $("leadsUnanswered").innerHTML = unanswered.length ? `<table>
+        <thead><tr><th>Último mensaje</th><th>Cuenta</th><th>Anuncio</th></tr></thead>
+        <tbody>${unanswered.map(row => `<tr>
+          <td>${escapeHtml(daysText(row.age_days))}<br><span class="muted">${escapeHtml(row.last_activity)}</span></td>
+          <td>${escapeHtml(accountName(row.account))}</td>
+          <td><strong>${escapeHtml(row.title)}</strong><br><span class="muted">${escapeHtml(row.label)}</span></td>
+        </tr>`).join("")}</tbody></table>`
+        : `<div class="review-empty">${anyRead ? "Nadie está esperando una primera respuesta." : "Todavía no hay conversaciones leídas."}</div>`;
+
+      $("leadsAccounts").innerHTML = `<table>
+        <thead><tr><th>Cuenta</th><th>7 días</th><th>14 días</th><th>30 días</th><th>Leídas en total</th><th>Sin ninguna respuesta (14 días)</th></tr></thead>
+        <tbody>${accounts.map(key => {
+          const row = perAccount[key] || {};
+          return `<tr>
+            <td><strong>${escapeHtml(accountName(key))}</strong></td>
+            <td>${row.last_7 || 0}</td>
+            <td>${row.last_14 || 0}</td>
+            <td>${row.last_30 || 0}</td>
+            <td>${row.total || 0}</td>
+            <td>${row.unanswered || 0}</td>
+          </tr>`;
+        }).join("")}</tbody></table>`;
+
+      $("leadsProducts").innerHTML = `<table>
+        <thead><tr><th>Producto</th><th>Leads</th>${accounts.map(key => `<th>${escapeHtml(accountName(key))}</th>`).join("")}<th>Clics</th><th>Leads por cada 100 clics</th></tr></thead>
+        <tbody>${(leadsState.products || []).map(row => `<tr>
+          <td><strong>${escapeHtml(row.label)}</strong>${row.focus ? ` <span class="health-tag info">Enfoque</span>` : ""}</td>
+          <td>${row.leads}</td>
+          ${accounts.map(key => `<td>${row.by_account[key] || 0}</td>`).join("")}
+          <td>${row.clicks}</td>
+          <td>${row.rate ?? "—"}</td>
+        </tr>`).join("")}</tbody></table>`;
+    }
+
     function showTab(name) {
       document.querySelectorAll(".tab").forEach(tab => tab.classList.add("hidden"));
       document.querySelectorAll("nav button").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === name));
       $(name).classList.remove("hidden");
       if (name === "listings") loadListings().catch(error => toast(error.message));
+      if (name === "leads") loadLeads().catch(error => toast(error.message));
     }
 
     document.querySelectorAll("nav button").forEach(btn => btn.onclick = () => showTab(btn.dataset.tab));
@@ -1675,10 +1741,19 @@
       renderListings();
       toast("Revisión pedida: el bot leerá los anuncios en su próxima vuelta (dentro de su horario).");
     };
+    $("leadsScanBtn").onclick = async () => {
+      try {
+        await api("/api/listings/scan", { method: "POST", body: JSON.stringify({ account: "" }) });
+        toast("Revisión pedida: el bot leerá los anuncios y la bandeja en su próxima vuelta (dentro de su horario).");
+      } catch (error) {
+        toast(error.message);
+      }
+    };
     $("listingsAccount").addEventListener("change", renderListings);
     $("listingsFilter").addEventListener("change", renderListings);
     setInterval(() => {
       if (!$("listings").classList.contains("hidden")) loadListings().catch(() => {});
+      if (!$("leads").classList.contains("hidden")) loadLeads().catch(() => {});
     }, 20000);
     $("saveBtn").onclick = saveConfig;
     $("autoGenerateBtn").onclick = () => generateAutonomyWeek().catch(error => toast(error.message));

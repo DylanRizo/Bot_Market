@@ -23,6 +23,7 @@
       <button data-tab="assistant" class="active">Nueva publicación</button>
       <button data-tab="autonomy">Automatización</button>
       <button data-tab="listings">Anuncios</button>
+      <button data-tab="leads">Leads</button>
       <button data-tab="overview">Actividad</button>
       <button data-tab="inventory">Inventario</button>
       <button data-tab="accounts">Cuentas</button>
@@ -387,6 +388,39 @@
           <div class="assistant-section">
             <div class="section-heading"><div><span class="step-label">Historial</span><h3>Acciones recientes</h3></div></div>
             <div id="listingsActions" class="table-wrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="leads" class="tab hidden">
+        <div class="assistant-shell">
+          <div class="autonomy-top">
+            <div>
+              <h2>Leads</h2>
+              <p class="muted">Quién escribe por Marketplace en cada cuenta. El bot lee la lista de ventas una vez al día: no abre los chats, no contesta y no guarda nombres ni mensajes.</p>
+            </div>
+            <button id="leadsScanBtn" class="primary">Revisar ahora</button>
+          </div>
+
+          <div id="leadsMetrics" class="metric-strip"></div>
+          <div id="leadsScans" class="scan-strip"></div>
+
+          <div class="assistant-section">
+            <div class="section-heading"><div><span class="step-label">Por contestar</span><h3>Escribieron y nadie les respondió</h3></div></div>
+            <div id="leadsUnanswered" class="table-wrap"></div>
+            <small class="field-help">Últimos 14 días. El bot no contesta: hay que responderles desde la cuenta. Después de contestar, cada chat sale de esta lista en la siguiente lectura.</small>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading"><div><span class="step-label">Cuentas</span><h3>Conversaciones con actividad</h3></div></div>
+            <div id="leadsAccounts" class="table-wrap"></div>
+            <small class="field-help">Se cuentan por la fecha del último mensaje de cada chat. Dos personas con el mismo nombre que escriben por el mismo anuncio cuentan como una.</small>
+          </div>
+
+          <div class="assistant-section">
+            <div class="section-heading"><div><span class="step-label">Productos</span><h3>Qué producto genera más leads</h3></div></div>
+            <div id="leadsProducts" class="table-wrap"></div>
+            <small class="field-help">Últimos 14 días. Los clics son de los anuncios activos hoy; si un producto tiene menos clics que leads, no se calcula la proporción.</small>
           </div>
         </div>
       </section>

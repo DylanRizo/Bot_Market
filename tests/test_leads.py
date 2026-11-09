@@ -8,6 +8,7 @@ import pytest
 
 import marketplace_leads as leads
 import marketplace_listing_worker as lw
+import marketplace_listings as listings
 
 HOY = date(2026, 11, 8)  # domingo
 
@@ -96,6 +97,77 @@ def test_una_actualizacion_vieja_no_retrocede_la_ultima_actividad(store):
     leads.save_rows(store, "cuenta1", [leads.parse_row(["Ana", "· Durag", "Hola", "Sat"], HOY)])
     with store.connect() as connection:
         assert connection.execute("SELECT last_activity FROM leads").fetchone()[0] == "2026-11-08"
+
+
+def test_el_reporte_separa_cuentas_y_fechas(store):
+    reciente = leads.parse_row(["Ana", "· Durag - Negro", "Hola", "Sat"], HOY)
+    viejo = leads.parse_row(["Luis", "· Durag - Negro", "Hola", "3w"], HOY)
+    sin_contestar = leads.parse_row(["Eva", "· Durag - Negro", "Eva sent you a message about your listing: x", "7:08 AM"], HOY)
+    leads.save_rows(store, "cuenta1", [reciente, viejo, sin_contestar])
+    leads.save_rows(store, "cuenta2", [reciente])
+
+    reporte = leads.report(store, HOY)
+
+    assert reporte["accounts"] == [
+        {"account": "cuenta1", "total": 3, "last_7": 2, "last_14": 2, "last_30": 3, "unanswered": 1},
+        {"account": "cuenta2", "total": 1, "last_7": 1, "last_14": 1, "last_30": 1, "unanswered": 0},
+    ]
+    assert reporte["unanswered"] == [
+        {"account": "cuenta1", "title": "Durag - Negro", "family_key": "durags", "last_activity": "2026-11-08", "age_days": 0},
+    ]
+
+
+def test_un_chat_viejo_sin_contestar_no_sale_en_pendientes(store):
+    viejo = leads.parse_row(["Eva", "· Durag", "Eva sent you a message about your listing: x", "3w"], HOY)
+    leads.save_rows(store, "cuenta1", [viejo])
+
+    reporte = leads.report(store, HOY)
+
+    assert reporte["unanswered"] == []
+    assert reporte["accounts"][0]["unanswered"] == 0
+
+
+def test_el_enfoque_va_primero_aunque_no_tenga_leads(store):
+    leads.save_rows(store, "cuenta1", [leads.parse_row(["Ana", "· Durag - Negro", "Hola", "Sat"], HOY)])
+
+    productos = leads.report(store, HOY)["products"]
+
+    assert [p["family_key"] for p in productos] == ["calcetas", "compression_short", "bershka", "durags"]
+    assert [p["focus"] for p in productos] == [True, True, True, False]
+    assert productos[0]["leads"] == 0
+    assert productos[3]["by_account"] == {"cuenta1": 1}
+
+
+def anuncio(store, clave, familia, clics, status="in_stock", present=1):
+    listings.ensure_schema(store)
+    with store.connect() as connection:
+        connection.execute(
+            """INSERT INTO listings (key, account, title, family_key, status, clicks_14d, first_seen, last_seen, present)
+               VALUES (?, 'cuenta1', 'x', ?, ?, ?, 'a', 'a', ?)""",
+            (clave, familia, status, clics, present),
+        )
+
+
+def test_la_proporcion_usa_solo_los_clics_de_anuncios_activos(store):
+    leads.save_rows(store, "cuenta1", [leads.parse_row(["Ana", "· Durag - Negro", "Hola", "Sat"], HOY)])
+    anuncio(store, "a", "durags", 50)
+    anuncio(store, "b", "durags", 900, status="sold")
+    anuncio(store, "c", "durags", 900, present=0)
+
+    durags = next(p for p in leads.report(store, HOY)["products"] if p["family_key"] == "durags")
+
+    assert (durags["clicks"], durags["rate"]) == (50, 2)
+
+
+@pytest.mark.parametrize("clics", [0, 1])
+def test_sin_clics_suficientes_no_se_inventa_proporcion(store, clics):
+    filas = [leads.parse_row([nombre, "· Durag - Negro", "Hola", "Sat"], HOY) for nombre in ("Ana", "Luis")]
+    leads.save_rows(store, "cuenta1", filas)
+    anuncio(store, "a", "durags", clics)
+
+    durags = next(p for p in leads.report(store, HOY)["products"] if p["family_key"] == "durags")
+
+    assert durags["rate"] is None
 
 
 def test_el_trabajador_guarda_los_leads(store):
