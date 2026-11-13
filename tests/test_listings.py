@@ -133,6 +133,49 @@ def test_vendido_no_se_toca():
     assert rec(anuncio(estado="sold", dias=80, clics=0)) == "none"
 
 
+# --- recomendaciones con leads -------------------------------------------------
+
+def test_con_leads_lo_que_convence_se_renueva_para_darle_alcance():
+    assert rec(anuncio(dias=10, clics=100), leads=12) == "renew"
+    assert rec(anuncio(dias=5, clics=100), leads=12) == "keep"
+
+
+def test_con_leads_no_se_renueva_dos_veces_en_la_semana():
+    assert rec(anuncio(dias=12, clics=100), leads=12, last_renew="2026-09-22T10:00:00", renew_count=1) == "keep"
+
+
+def test_con_leads_lo_que_atrae_pero_no_convence_pide_revisar():
+    accion, motivo = listings.recommend(anuncio(dias=10, clics=150), HOY, has_stock=True, leads=6)
+    assert accion == "review" and "no convence" in motivo and "4 por cada 100" in motivo
+
+
+def test_con_leads_cerca_del_promedio_es_normal():
+    accion, motivo = listings.recommend(anuncio(dias=10, clics=175), HOY, has_stock=True, leads=15)
+    assert accion == "keep" and motivo.startswith("Normal")
+    assert rec(anuncio(dias=10, clics=185), leads=9) == "review"
+
+
+def test_con_leads_y_pocos_clics_no_se_juzga():
+    accion, motivo = listings.recommend(anuncio(dias=10, clics=20), HOY, has_stock=True, leads=0)
+    assert accion == "keep" and "pocos clics" in motivo
+    assert rec(anuncio(dias=8, clics=2), leads=0) == "renew"
+
+
+def test_las_recomendaciones_usan_los_leads_de_cada_anuncio(store):
+    import marketplace_leads as leads
+
+    cards_para(store, "cuenta1", tarjeta("Durag - Negro", fecha="9/10", clics="100 clicks on listing"))
+    listings.refresh_recommendations(store, None, today=HOY)
+    sin_bandeja = listings.list_listings(store)[0]
+    assert sin_bandeja["recommendation"] == "review" and "Mucho interes" in sin_bandeja["reason"]
+
+    filas = [leads.parse_row([f"Persona {n}", "· Durag - Negro", "Hola", "Mon"], HOY) for n in range(12)]
+    leads.save_rows(store, "cuenta1", filas)
+    listings.refresh_recommendations(store, None, today=HOY)
+    con_bandeja = listings.list_listings(store)[0]
+    assert con_bandeja["recommendation"] == "renew" and "Funciona: 12 leads de 100 clics" in con_bandeja["reason"]
+
+
 # --- base de datos y cola ------------------------------------------------------
 
 def cards_para(store, cuenta, *cards):

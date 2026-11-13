@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 import time
@@ -39,6 +40,8 @@ RULES: dict[str, int] = {
     "renew_cooldown_days": 7,   # no renovar el mismo anuncio mas de una vez por semana
     "low_clicks": 5,            # menos que esto en 14 dias es poco interes
     "high_clicks": 15,          # desde aqui hay interes; si no se vende, algo falla
+    "judge_clicks": 30,         # con leads: desde aqui se puede juzgar si el anuncio convence
+    "good_rate": 9,             # leads por cada 100 clics: el promedio de las tres cuentas en noviembre
     "stale_days": 21,           # renovado y sin interes: toca cambiar foto o titulo
     "dead_days": 45,            # mas viejo que esto y sin interes: eliminar
     "renews_before_edit": 2,
@@ -51,7 +54,7 @@ ACTION_LABELS = {
     "wait": "Esperar",
     "keep": "Va bien",
     "renew": "Renovar",
-    "review": "Revisar precio y mensajes",
+    "review": "Revisar anuncio",
     "edit": "Cambiar foto o titulo",
     "delete": "Eliminar",
     "relist": "Republicar",
@@ -245,8 +248,9 @@ def recommend(
     last_renew: str = "",
     renew_count: int = 0,
     rules: dict[str, int] | None = None,
+    leads: int | None = None,
 ) -> tuple[str, str]:
-    """(accion, motivo) para un anuncio."""
+    """(accion, motivo) para un anuncio. `leads` es None si la bandeja de la cuenta no se ha leido."""
     rules = {**RULES, **(rules or {})}
     status = listing.get("status")
     age = age_days(str(listing.get("listed_on") or ""), today)
@@ -280,7 +284,9 @@ def recommend(
         return "wait", f"Recien publicado ({age} dia{'s' if age != 1 else ''}); todavia no se puede juzgar."
     if age >= rules["dead_days"] and clicks < rules["low_clicks"]:
         return "delete", f"Lleva {age} dias y solo {clicks} clics en 14 dias. Ocupa espacio sin vender."
-    if clicks >= rules["high_clicks"]:
+    if leads is not None and clicks >= rules["judge_clicks"]:
+        return _judge_by_leads(clicks, leads, age, today, last_renew, rules)
+    if leads is None and clicks >= rules["high_clicks"]:
         if age >= rules["renew_after_days"]:
             return "review", (
                 f"Mucho interes ({clicks} clics) pero sigue sin venderse despues de {age} dias: "
@@ -297,7 +303,35 @@ def recommend(
                 "cambia la foto principal, el titulo o el precio."
             )
         return "renew", f"Poco interes ({clicks} clics en {window} dias): renovarlo lo vuelve a subir en Marketplace."
+    if leads is not None:
+        return "keep", f"{clicks} clics y {_leads_text(leads)} en {window} dias: todavia pocos clics para juzgar si convence."
     return "keep", f"{clicks} clics en {window} dias."
+
+
+def _leads_text(leads: int) -> str:
+    return f"{leads} lead{'s' if leads != 1 else ''}"
+
+
+def _judge_by_leads(
+    clicks: int, leads: int, age: int, today: date, last_renew: str, rules: dict[str, int]
+) -> tuple[str, str]:
+    """Con suficientes clics, lo que dice cuantos escriben: funciona, normal, o atrae pero no convence."""
+    share = rules["good_rate"] / 100
+    summary = f"{_leads_text(leads)} de {clicks} clics ({round(100 * leads / clicks)} por cada 100)"
+    expected = clicks * share
+    # Solo se marca lo que queda por debajo del promedio mas de lo que explica la
+    # suerte (binomial, una cola al 95 %): 15 leads de 175 clics es normal; 9 de 185 no.
+    if leads < expected - 1.645 * math.sqrt(expected * (1 - share)):
+        return "review", (
+            f"Atrae pero no convence: {summary}, muy por debajo del promedio de {rules['good_rate']}. "
+            "Revisa el precio, las tallas, las fotos y la descripcion."
+        )
+    if leads < expected:
+        return "keep", f"Normal: {summary}, cerca del promedio de {rules['good_rate']}."
+    renewed_days = age_days(last_renew[:10], today) if last_renew else None
+    if age >= rules["renew_after_days"] and (renewed_days is None or renewed_days >= rules["renew_cooldown_days"]):
+        return "renew", f"Funciona: {summary}. Renovarlo lo vuelve a subir y le da mas alcance."
+    return "keep", f"Funciona: {summary}."
 
 
 # --- base de datos -----------------------------------------------------------
@@ -545,10 +579,13 @@ def refresh_recommendations(
     today: date | None = None,
 ) -> dict[str, int]:
     """Recalcula la recomendacion de cada anuncio presente."""
+    import marketplace_leads
+
     today = today or date.today()
     stock = family_stock(report)
     rotation = set(rotation)
     listings = list_listings(store)
+    lead_accounts, lead_counts = marketplace_leads.listing_leads(store, today)
     counts: dict[str, int] = {}
     by_account_family: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for listing in listings:
@@ -586,6 +623,10 @@ def refresh_recommendations(
                 active_same_family=bool(siblings),
                 last_renew=last_renew,
                 renew_count=renew_count,
+                leads=(
+                    lead_counts.get((listing["account"], plain(listing["title"])), 0)
+                    if listing["account"] in lead_accounts else None
+                ),
             )
             action, reason = cross_account_copy(listing, today, family_best, action, reason)
             if len(twin_groups.get(twin_id(listing), [])) > 1 and action in EXECUTABLE_ACTIONS:
@@ -645,7 +686,7 @@ def cross_account_copy(
     account, best = max(others.items(), key=lambda item: item[1])
     return "delete", (
         f"La cuenta {account} tiene este producto con {best} clics y aqui lleva {clicks} en {age} dias: "
-        "Facebook probablemente lo trata como copia y lo esconde. Borralo: entra primero en el proximo "
+        "Facebook probablemente lo trata como copia y lo esconde. Borralo: si el producto da leads, entra primero en el proximo "
         "calendario de esta cuenta, con texto nuevo y otra portada."
     )
 
@@ -719,6 +760,11 @@ def republish_requests(store: MarketplaceStore) -> dict[tuple[str, str], str]:
                GROUP BY a.account, l.family_key"""
         ).fetchall()
     return {(row["account"], row["family_key"]): str(row["finished_at"]) for row in rows}
+
+
+def scan_usable(state: dict[str, Any]) -> bool:
+    """La ultima lectura de "Tus anuncios" salio bien, aunque ya se haya pedido otra."""
+    return state.get("status") == "ok" or (state.get("status") == "requested" and bool(state.get("last_ok")))
 
 
 def active_listing(store: MarketplaceStore, account: str, family: str) -> dict[str, Any] | None:

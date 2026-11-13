@@ -138,13 +138,15 @@ def test_el_enfoque_va_primero_aunque_no_tenga_leads(store):
     assert productos[3]["by_account"] == {"cuenta1": 1}
 
 
-def anuncio(store, clave, familia, clics, status="in_stock", present=1):
+def anuncio(store, clave, familia, clics, status="in_stock", present=1,
+            listed_on="2026-10-20", last_seen="2026-11-08T10:00:00"):
     listings.ensure_schema(store)
     with store.connect() as connection:
         connection.execute(
-            """INSERT INTO listings (key, account, title, family_key, status, clicks_14d, first_seen, last_seen, present)
-               VALUES (?, 'cuenta1', 'x', ?, ?, ?, 'a', 'a', ?)""",
-            (clave, familia, status, clics, present),
+            """INSERT INTO listings (key, account, title, family_key, status, listed_on, clicks_14d, first_seen,
+                                     last_seen, present)
+               VALUES (?, 'cuenta1', 'x', ?, ?, ?, ?, 'a', ?, ?)""",
+            (clave, familia, status, listed_on, clics, last_seen, present),
         )
 
 
@@ -185,3 +187,40 @@ def test_si_falla_la_bandeja_no_se_inventan_leads(store):
     leads.ensure_schema(store)
     with store.connect() as connection:
         assert connection.execute("SELECT count(*) FROM leads").fetchone()[0] == 0
+
+
+def test_el_puntaje_por_producto_cuenta_tambien_los_anuncios_borrados(store):
+    filas = [leads.parse_row([nombre, "· Durag - Negro", "Hola", "Sat"], HOY) for nombre in ("Ana", "Luis")]
+    leads.save_rows(store, "cuenta1", filas)
+    anuncio(store, "a", "durags", 50)
+    anuncio(store, "b", "durags", 0, present=0)
+    anuncio(store, "c", "munequeras", 3, present=0)
+    anuncio(store, "d", "tops", 3, listed_on="2026-11-05")  # recien publicado: todavia no cuenta
+    anuncio(store, "e", "bolsos", 3, last_seen="2026-10-01T10:00:00")  # no se ve hace mas de dos semanas
+
+    assert leads.family_scores(store, HOY) == {"durags": 1.0, "munequeras": 0.0}
+
+
+def test_sin_bandeja_leida_no_hay_puntajes(store):
+    anuncio(store, "a", "munequeras", 3)
+    assert leads.family_scores(store, HOY) == {}
+
+
+def test_avisa_de_los_chats_recientes_sin_respuesta_y_lo_quita_al_contestar(store):
+    hoy = date.today()
+    sin_contestar = leads.parse_row(["Eva", "· Durag", "Eva sent you a message about your listing: x", "7:08 AM"], hoy)
+    lw.scan_leads(store, "cuenta1", "x", run=lambda _: (0, "[leads-json]" + json.dumps([sin_contestar])))
+    alertas = store.list_alerts()
+    assert [(alerta["code"], alerta["account"]) for alerta in alertas] == [("LEADS_UNANSWERED", "cuenta1")]
+    assert alertas[0]["message"].startswith("1 persona escribio en los ultimos 3 dias y nadie le respondio")
+    assert "Eva" not in alertas[0]["message"]
+
+    contestado = leads.parse_row(["Eva", "· Durag", "You: Si, disponible", "7:08 AM"], hoy)
+    lw.scan_leads(store, "cuenta1", "x", run=lambda _: (0, "[leads-json]" + json.dumps([contestado])))
+    assert store.list_alerts() == []
+
+
+def test_un_chat_sin_respuesta_de_hace_una_semana_no_avisa(store):
+    viejo = leads.parse_row(["Eva", "· Durag", "Eva sent you a message about your listing: x", "1w"], date.today())
+    lw.scan_leads(store, "cuenta1", "x", run=lambda _: (0, "[leads-json]" + json.dumps([viejo])))
+    assert store.list_alerts() == []

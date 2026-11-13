@@ -74,7 +74,16 @@ def request_scan(store: MarketplaceStore, account: str = "") -> None:
     """Hace que la proxima vuelta del trabajador lea los anuncios (todas las cuentas si no se indica)."""
     accounts = [account] if account else list(_accounts())
     for key in accounts:
-        store.heartbeat(scan_state_key(key), {"status": "requested", "attempted_at_epoch": 0})
+        previous = store.worker_state(scan_state_key(key))
+        # La lectura anterior sigue valiendo hasta que llegue la nueva. El 8 de
+        # noviembre una revision pedida fuera de horario dejo al calendario sin
+        # poder proponer nada: creia que las cuentas no estaban revisadas.
+        store.heartbeat(scan_state_key(key), {
+            "status": "requested",
+            "attempted_at_epoch": 0,
+            "last_ok": listings.scan_usable(previous),
+            "scanned_at": previous.get("scanned_at", ""),
+        })
 
 
 def _accounts() -> dict[str, Any]:
@@ -169,7 +178,27 @@ def scan_leads(
         return {"ok": False, "code": error_code, "detail": detail}
     result = leads.save_rows(store, account, json.loads(match.group(1)))
     store.heartbeat(leads_state_key(account), {"status": "ok", **result})
+    alert_unanswered(store, account)
     return {"ok": True, **result}
+
+
+def alert_unanswered(store: MarketplaceStore, account: str) -> int:
+    """Avisa en el panel de los primeros mensajes recientes sin respuesta. El bot no contesta chats."""
+    count = leads.unanswered_recent(store, account)
+    if count:
+        who, them = ("persona escribio", "le") if count == 1 else ("personas escribieron", "les")
+        store.create_alert(
+            "warning", "LEADS_UNANSWERED",
+            f"{count} {who} en los ultimos {leads.ALERT_DAYS} dias y nadie {them} respondio. Estan en la pestana Leads.",
+            account,
+        )
+    else:
+        with store.connect() as connection:
+            connection.execute(
+                "UPDATE alerts SET status='resolved', updated_at=? WHERE status='open' AND code='LEADS_UNANSWERED' AND account=?",
+                (datetime.now().isoformat(timespec="seconds"), account),
+            )
+    return count
 
 
 def queue_automatic_actions(store: MarketplaceStore) -> int:
@@ -228,7 +257,7 @@ def execute_action(
     if code == 0 and done:
         detail = done.group(1).strip()
         if row["action"] == "delete" and row.get("origin") == "manual":
-            detail += " Entra primero en el proximo calendario de esta cuenta, con texto nuevo."
+            detail += " Si el producto da leads, entra primero en el proximo calendario de esta cuenta, con texto nuevo."
         listings.finish_action(store, row["id"], "done", detail)
         if row["action"] == "relist":
             record_publication(store, row["account"], listing["title"], "republicado")

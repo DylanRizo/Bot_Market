@@ -263,3 +263,37 @@ def test_generate_week_falla_claro_si_no_hay_productos(store, monkeypatch):
     monkeypatch.setattr(scheduler, "custom_rotation_jobs", lambda *a, **k: [])
     with pytest.raises(RuntimeError, match="No hay familias"):
         generate_week(store, base_config())
+
+
+def test_el_calendario_pone_primero_el_enfoque_y_deja_descansar_lo_que_no_da_leads(store, monkeypatch, photo):
+    # 9 de noviembre: tras borrar munequeras y tops sin interes, el calendario
+    # los volvio a proponer primero.
+    import marketplace_leads as leads
+    import marketplace_listings as listings
+    from marketplace_safety import save_safety
+
+    hoy = date.today()
+    jobs = [
+        {"name": nombre, "family_key": familia, "image_paths": [str(photo(familia))],
+         "excel": "ArticulosGenerados.xlsx", "images_root": "imagenes_productos"}
+        for nombre, familia in (("Munequeras", "munequeras"), ("Durags", "durags"), ("Medias", "calcetas"))
+    ]
+    monkeypatch.setattr(scheduler, "build_family_jobs", lambda *a, **k: list(jobs))
+    monkeypatch.setattr(scheduler, "custom_rotation_jobs", lambda *a, **k: [])
+    save_safety(store, {"warmup_enabled": False, "family_repeat_days": 0})
+    leads.save_rows(store, "cuenta1", [leads.parse_row(["Ana", "· Durag - Negro", "Hola", "2h"], hoy)])
+    listings.ensure_schema(store)
+    with store.connect() as connection:
+        connection.execute(
+            """INSERT INTO listings (key, account, title, family_key, status, listed_on, clicks_14d, first_seen,
+                                     last_seen, present)
+               VALUES ('m', 'cuenta1', 'Munequeras', 'munequeras', 'in_stock', ?, 1, ?, ?, 0)""",
+            ((hoy - timedelta(days=30)).isoformat(), hoy.isoformat(), hoy.isoformat()),
+        )
+
+    resultado = generate_week(store, base_config(horizon_days=3, max_per_day=1, cooldown_days=0),
+                              start_date=hoy + timedelta(days=1))
+
+    cola = sorted(store.list_queue(), key=lambda item: item["scheduled_at"])
+    assert [item["family_key"] for item in cola] == ["calcetas", "durags"]
+    assert resultado["resting"] == ["Munequeras deportivas"]

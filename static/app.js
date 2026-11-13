@@ -299,6 +299,7 @@
       PRICE_ISSUE: ["Precio dudoso en el SGI", "Corrige el precio en el SGI; mientras tanto no se publica."],
       WORKER_ERROR: ["El trabajador tuvo un error", "Suele resolverse solo. Si se repite, reinicia el panel."],
       DRIVE_NOT_AUTHORIZED: ["Google Drive sin autorizar", "Pulsa \"Autorizar Google Drive\" en la sección del SGI."],
+      LEADS_UNANSWERED: ["Chats sin contestar", "Contéstales desde esa cuenta: el bot no responde mensajes. La lista está en la pestaña Leads."],
     };
     const HEALTH_LABELS = {
       ok: ["Lista", "ok"],
@@ -790,13 +791,14 @@
       const result = await api("/api/autonomy/generate", { method: "POST", body: JSON.stringify({ replace }) });
       state.autonomy = result.autonomy;
       renderAutonomy();
-      const { created, available_slots: available, skipped_slots: skipped, families } = result.result;
+      const { created, available_slots: available, skipped_slots: skipped, families, resting = [] } = result.result;
       const note = $("autoGenerateNote");
       note.hidden = false;
       note.classList.toggle("warning", skipped > 0);
       note.innerHTML = skipped > 0
         ? `<strong>Se agregaron ${created} publicaciones y ${skipped} de ${available} espacios quedaron vacíos.</strong> Solo hay ${families} ${families === 1 ? "producto" : "productos"} con fotos que todavía no se usaron en esas cuentas. Para llenar más días, marca otra cuenta, sube a Drive fotos de más productos con stock o vuelve a sincronizar cuando haya más inventario.`
         : `<strong>Se agregaron ${created} publicaciones</strong> en los ${available} espacios de la semana.`;
+      if (resting.length) note.innerHTML += ` Descansan por casi no dar leads en dos semanas: ${escapeHtml(resting.join(", "))}.`;
       toast(`${created} publicaciones agregadas al calendario`);
     }
 

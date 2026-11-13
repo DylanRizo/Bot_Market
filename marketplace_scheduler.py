@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import statistics
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
 from marketplace_catalog import ASSISTANT_PRESETS, build_family_jobs, catalog_families
 from marketplace_custom_products import custom_rotation_jobs
+import marketplace_leads
 from marketplace_safety import load_safety, warmup_cap
 from marketplace_storage import DEFAULT_DB, MarketplaceStore, listing_fingerprint
 
@@ -315,8 +317,7 @@ def reuse_check(
     requested = bool(deleted_at) and deleted_at > last.isoformat(timespec="seconds")
     if days < int(safety.get("reuse_days", 14)) and not requested:
         return False, None
-    scan = store.worker_state(f"listings_scan:{account}")
-    if scan.get("status") != "ok":
+    if not marketplace_listings.scan_usable(store.worker_state(f"listings_scan:{account}")):
         return False, None
 
     if marketplace_listings.active_listing(store, account, family):
@@ -432,11 +433,27 @@ def _generate_week(
         for image in store.job_image_paths(item.get("job") or {}):
             reserved_media.add((item["account"], store.image_hash(image)))
 
+    # Primero el enfoque, despues lo que mas leads da por anuncio y, a igualdad, lo
+    # que hace mas que no sale. Un producto sin datos queda a media tabla. Lo que en
+    # dos semanas casi no dio leads descansa: el 9 de noviembre el calendario
+    # volvio a proponer las munequeras y los tops que se acababan de borrar por
+    # no tener interes.
+    scores = marketplace_leads.family_scores(store)
+    neutral = statistics.median(scores.values()) if scores else 0.0
+    focus = {family: rank for rank, family in enumerate(marketplace_leads.FOCUS_FAMILIES)}
+    resting = {
+        family for family, score in scores.items()
+        if score < marketplace_leads.WEAK_SCORE and family not in focus
+    }
     jobs = sorted(
-        family_jobs,
-        key=lambda job: min(
-            (last_used.get((account, str(job.get("family_key"))), datetime.min) for account in config["accounts"]),
-            default=datetime.min,
+        (job for job in family_jobs if str(job.get("family_key") or "") not in resting),
+        key=lambda job: (
+            focus.get(str(job.get("family_key") or ""), len(focus)),
+            -scores.get(str(job.get("family_key") or ""), neutral),
+            min(
+                (last_used.get((account, str(job.get("family_key"))), datetime.min) for account in config["accounts"]),
+                default=datetime.min,
+            ),
         ),
     )
     # Lo que la persona borro desde Anuncios va primero en esa cuenta, si todavia
@@ -540,6 +557,7 @@ def _generate_week(
         "skipped_slots": skipped_slots,
         "expired": expired,
         "families": len(jobs),
+        "resting": sorted(ASSISTANT_PRESETS.get(family, {}).get("label", family) for family in resting),
         "config": config,
     }
 

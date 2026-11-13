@@ -643,12 +643,14 @@ def ensure_future_calendar(store: MarketplaceStore, config: dict[str, Any]) -> N
                 (now_iso(),),
             )
     if not result["created"]:
+        resting = result.get("resting") or []
         store.create_alert(
             "warning",
             "CALENDAR_EMPTY",
             "No hay nada que programar: cada cuenta ya uso las fotos de todos los productos en rotacion. "
             "Los productos se pueden repetir cuando pasen los dias de espera y la cuenta no tenga un anuncio "
-            "activo de ellos; mientras tanto, sube fotos nuevas o agrega productos a la rotacion.",
+            "activo de ellos; mientras tanto, sube fotos nuevas o agrega productos a la rotacion."
+            + (f" Descansan por casi no dar leads en dos semanas: {', '.join(resting)}." if resting else ""),
         )
 
 

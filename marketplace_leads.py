@@ -84,8 +84,12 @@ AGE_DAYS = {"d": 1, "w": 7, "sem": 7, "y": 365, "a": 365}
 OWN_MESSAGE_PREFIXES = ("you:", "you sent", "you replied", "tu:", "enviaste", "respondiste")
 # Mientras nadie conteste, Facebook muestra este aviso en lugar del ultimo mensaje.
 FIRST_CONTACT_PHRASES = ("sent you a message about your listing", "te envio un mensaje sobre tu")
-# Los productos en los que se concentra la venta: el panel los pone primero.
+# Los productos en los que se concentra la venta: el panel y el calendario los ponen primero.
 FOCUS_FAMILIES = ("calcetas", "compression_short", "bershka")
+RECENT_DAYS = 14  # la misma ventana de los clics de Facebook
+ALERT_DAYS = 3  # un interesado sin respuesta se enfria rapido
+# Menos de un lead por anuncio en dos semanas: el producto descansa del calendario.
+WEAK_SCORE = 1.0
 
 
 def ensure_schema(store: MarketplaceStore) -> None:
@@ -225,6 +229,65 @@ def report(store: MarketplaceStore, today: date | None = None) -> dict[str, Any]
             {**dict(row), "age_days": (today - date.fromisoformat(row["last_activity"])).days} for row in unanswered
         ],
     }
+
+
+def listing_leads(store: MarketplaceStore, today: date | None = None) -> tuple[set[str], dict[tuple[str, str], int]]:
+    """Las cuentas con la bandeja ya leida y los leads recientes de cada (cuenta, titulo normalizado)."""
+    today = today or date.today()
+    ensure_schema(store)
+    since = (today - timedelta(days=RECENT_DAYS)).isoformat()
+    with store.connect() as connection:
+        accounts = {row[0] for row in connection.execute("SELECT DISTINCT account FROM leads")}
+        rows = connection.execute(
+            "SELECT account, title, COUNT(*) FROM leads WHERE last_activity >= ? GROUP BY account, title", (since,)
+        ).fetchall()
+    counts: dict[tuple[str, str], int] = {}
+    for account, title, total in rows:
+        key = (account, listings.plain(title))
+        counts[key] = counts.get(key, 0) + total
+    return accounts, counts
+
+
+def family_scores(store: MarketplaceStore, today: date | None = None) -> dict[str, float]:
+    """Leads de las ultimas dos semanas por cada anuncio de ese producto, en las cuentas ya leidas.
+
+    Cuentan los anuncios de mas de una semana vistos en esas dos semanas, tambien los
+    que ya se borraron. Sin datos de un producto no hay puntaje.
+    """
+    today = today or date.today()
+    ensure_schema(store)
+    listings.ensure_schema(store)
+    since = (today - timedelta(days=RECENT_DAYS)).isoformat()
+    settled = (today - timedelta(days=listings.RULES["renew_after_days"])).isoformat()
+    with store.connect() as connection:
+        accounts = [row[0] for row in connection.execute("SELECT DISTINCT account FROM leads")]
+        if not accounts:
+            return {}
+        marks = ",".join("?" * len(accounts))
+        seen = dict(connection.execute(
+            f"""SELECT family_key, COUNT(*) FROM listings
+                WHERE family_key <> '' AND status IN ('in_stock', 'pending') AND last_seen >= ?
+                  AND listed_on <> '' AND listed_on <= ? AND account IN ({marks})
+                GROUP BY family_key""",
+            (since, settled, *accounts),
+        ).fetchall())
+        found = dict(connection.execute(
+            "SELECT family_key, COUNT(*) FROM leads WHERE family_key <> '' AND last_activity >= ? GROUP BY family_key",
+            (since,),
+        ).fetchall())
+    return {family: found.get(family, 0) / max(1, seen.get(family, 0)) for family in {*seen, *found}}
+
+
+def unanswered_recent(store: MarketplaceStore, account: str, today: date | None = None) -> int:
+    """Primeros mensajes de los ultimos dias que nadie contesto en la cuenta."""
+    today = today or date.today()
+    ensure_schema(store)
+    since = (today - timedelta(days=ALERT_DAYS)).isoformat()
+    with store.connect() as connection:
+        return int(connection.execute(
+            "SELECT COUNT(*) FROM leads WHERE account = ? AND never_answered = 1 AND last_activity >= ?",
+            (account, since),
+        ).fetchone()[0])
 
 
 def read_inbox(driver, today: date) -> list[list[str]]:

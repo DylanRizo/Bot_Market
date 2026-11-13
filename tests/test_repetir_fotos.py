@@ -225,3 +225,27 @@ def test_tras_volver_a_publicarlo_ya_no_se_salta_la_espera(store, photo):
     # Se volvio a publicar con esas fotos: la peticion queda cumplida.
     usar_fotos(store, "cuenta1", fotos, hace_dias=0)
     assert scheduler.reuse_check(store, "cuenta1", "bolsos", fotos, load_safety(store))[0] is False
+
+
+def test_pedir_otra_lectura_no_invalida_la_anterior(store, photo):
+    # 8 de noviembre: "Revisar ahora" fuera de horario y luego "Regenerar" dejaron
+    # el calendario vacio, porque la cuenta parecia no revisada.
+    import marketplace_listing_worker as lw
+
+    foto = photo()
+    usar_fotos(store, "cuenta1", [foto], hace_dias=20)
+    revisar_anuncios(store, "cuenta1")
+    lw.request_scan(store, "cuenta1")
+    lw.request_scan(store, "cuenta1")
+    assert store.worker_state("listings_scan:cuenta1")["status"] == "requested"
+    assert scheduler.reuse_check(store, "cuenta1", "bolsos", [foto], load_safety(store))[0] is True
+
+
+def test_una_lectura_pedida_despues_de_un_error_no_sirve(store, photo):
+    import marketplace_listing_worker as lw
+
+    foto = photo()
+    usar_fotos(store, "cuenta1", [foto], hace_dias=20)
+    store.heartbeat("listings_scan:cuenta1", {"status": "error", "attempted_at_epoch": 0})
+    lw.request_scan(store, "cuenta1")
+    assert scheduler.reuse_check(store, "cuenta1", "bolsos", [foto], load_safety(store))[0] is False
