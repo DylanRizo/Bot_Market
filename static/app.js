@@ -39,6 +39,9 @@
           ...(options.headers || {}),
         },
       });
+      if (response.status === 401) {
+        throw new Error("El panel se reinició y esta pestaña quedó con la llave vieja. Ciérrala y vuelve a abrir el panel con su iniciador.");
+      }
       const payload = await response.json();
       if (!response.ok || payload.ok === false) throw new Error(payload.error || "Error");
       return payload;
@@ -649,7 +652,7 @@
         </div>`;
       }).join("");
       document.querySelectorAll("[data-auto-action]").forEach(button => {
-        button.onclick = () => autonomyItemAction(button.dataset.id, button.dataset.autoAction);
+        button.onclick = () => autonomyItemAction(button.dataset.id, button.dataset.autoAction).catch(error => toast(error.message));
       });
     }
 
@@ -829,10 +832,22 @@
         }
       }
       const payload = { id, action };
-      if (action === "move") payload.scheduled_at = document.querySelector(`[data-move-value="${CSS.escape(id)}"]`)?.value;
+      if (action === "move") {
+        const input = document.querySelector(`[data-move-value="${CSS.escape(id)}"]`);
+        payload.scheduled_at = input?.value;
+        if (!payload.scheduled_at) throw new Error("Elige la nueva fecha y hora en el campo de arriba.");
+        if (payload.scheduled_at === input.defaultValue) throw new Error("Primero cambia la fecha u hora en el campo de arriba y luego pulsa Mover.");
+      }
       const result = await api("/api/autonomy/item", { method: "POST", body: JSON.stringify(payload) });
       state.autonomy = result.autonomy;
       renderAutonomy();
+      const done = {
+        move: `Movida al ${String(payload.scheduled_at).replace("T", " a las ")}`,
+        approve: "Aprobada: el bot la publicará a su hora",
+        cancel: "Omitida: ya no se publicará",
+        retry: "Se volverá a intentar",
+      };
+      toast(done[action] || "Listo");
     }
 
     function renderAssistant() {
