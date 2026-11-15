@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from marketplace_platform import SecretStoreMissing, load_secret, save_secret
+
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 SECRET_PATH = SCRATCH_DIR / ".sgi_integration_key.bin"
@@ -70,14 +72,7 @@ def load_integration_key(secret_path: Path = SECRET_PATH) -> str:
     environment_key = os.environ.get("SGI_INTEGRATION_KEY", "").strip()
     if environment_key:
         return environment_key
-    if not secret_path.is_file():
-        return ""
-    try:
-        import win32crypt
-
-        return win32crypt.CryptUnprotectData(secret_path.read_bytes(), None, None, None, 0)[1].decode("utf-8").strip()
-    except Exception:
-        return ""
+    return load_secret("sgi_integration_key", secret_path)
 
 
 def save_integration_key(key: str, secret_path: Path = SECRET_PATH) -> None:
@@ -85,18 +80,9 @@ def save_integration_key(key: str, secret_path: Path = SECRET_PATH) -> None:
     if not KEY_PATTERN.fullmatch(value):
         raise ValueError("La llave del SGI debe tener 43 caracteres: letras, numeros, guion y guion bajo.")
     try:
-        import win32crypt
-    except ImportError as exc:
+        save_secret("sgi_integration_key", secret_path, value, "Marketplace bot SGI integration key")
+    except SecretStoreMissing as exc:
         raise RuntimeError("En este equipo configura SGI_INTEGRATION_KEY como variable de entorno.") from exc
-    encrypted = win32crypt.CryptProtectData(
-        value.encode("utf-8"),
-        "Marketplace bot SGI integration key",
-        None,
-        None,
-        None,
-        0,
-    )
-    secret_path.write_bytes(encrypted)
 
 
 def integration_key_configured(secret_path: Path = SECRET_PATH) -> bool:

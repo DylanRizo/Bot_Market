@@ -27,8 +27,9 @@ from marketplace_catalog import ASSISTANT_PRESETS, STYLE_TO_MODE
 from marketplace_custom_products import CUSTOM_ROOT, create_custom_product
 import marketplace_leads as leads_module
 import marketplace_listings as listings_module
+import marketplace_platform
 from marketplace_listing_worker import leads_state_key, request_scan, scan_state_key
-from marketplace_runtime import IMAGES_DIR_NAME, images_root, process_exists, process_wrote
+from marketplace_runtime import IMAGES_DIR_NAME, images_root, local_path, process_exists, process_wrote
 from marketplace_safety import (
     LEVELS as SAFETY_LEVELS,
     backfill_events,
@@ -74,7 +75,6 @@ INVENTORY_PATH = SCRATCH_DIR / "ArticulosGenerados.xlsx"
 IMAGES_ROOT = images_root(SCRATCH_DIR)
 CAMPAIGN_UPLOADS_ROOT = SCRATCH_DIR / "marketplace_campaign_uploads"
 RUNNER_PATH = SCRATCH_DIR / "marketplace_campaign_runner.py"
-OPEN_SESSION_SCRIPT = SCRATCH_DIR / "abrir_sesion_marketplace_cuenta.ps1"
 WORKER_PATH = SCRATCH_DIR / "marketplace_scheduler_worker.py"
 WORKER_PID_PATH = SCRATCH_DIR / "marketplace_scheduler_worker.pid"
 WORKER_LOG_PATH = SCRATCH_DIR / "marketplace_scheduler_worker.log"
@@ -167,10 +167,6 @@ def now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def expand_env(text: str) -> str:
-    return os.path.expandvars(text or "")
-
-
 def worker_pid() -> int:
     try:
         pid = int(WORKER_PID_PATH.read_text(encoding="utf-8").strip())
@@ -196,6 +192,9 @@ def start_worker() -> int:
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         creationflags=creation_flags,
+        # Fuera de Windows: grupo propio, para que Detener cierre tambien la
+        # publicacion en curso y cerrar la Terminal no lo mate.
+        start_new_session=os.name != "nt",
     )
     log_handle.close()
     WORKER_PID_PATH.write_text(str(process.pid), encoding="utf-8")
@@ -206,7 +205,7 @@ def stop_worker() -> bool:
     pid = worker_pid()
     if not pid or not process_exists(pid):
         return False
-    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True)
+    marketplace_platform.stop_process_tree(pid)
     try:
         WORKER_PID_PATH.unlink()
     except FileNotFoundError:
@@ -426,6 +425,7 @@ def media_path_from_id(media_id: str) -> Path:
 
 
 def media_descriptor(path: Path) -> dict[str, str]:
+    path = local_path(path)
     media_id = media_id_for_path(path)
     return {
         "id": media_id,
@@ -850,7 +850,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "ok": False,
                 "error": (
                     "No autorizado. Abre el panel con el enlace que imprime "
-                    "iniciar_panel_marketplace.ps1, que incluye el token de la sesion."
+                    f"{marketplace_platform.panel_launcher()}, que incluye el token de la sesion."
                 ),
             },
             status=401,
@@ -1250,22 +1250,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not account:
             raise RuntimeError(f"No existe cuenta {account_key}")
         address = account.get("debugger_address", "127.0.0.1:9222")
-        port = address.rsplit(":", 1)[-1]
-        profile = expand_env(account.get("chrome_profile", ""))
-        command = [
-            "powershell",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(OPEN_SESSION_SCRIPT),
-            "-Account",
-            str(account_key),
-            "-Port",
-            str(port),
-        ]
-        if profile:
-            command.extend(["-ProfileDir", profile])
-        subprocess.Popen(command, cwd=str(SCRATCH_DIR))
+        port = int(address.rsplit(":", 1)[-1])
+        marketplace_platform.open_chrome(str(account_key), port, str(account.get("chrome_profile") or ""), hidden=False)
         self.send_json({"ok": True})
 
     def _post_run_start(self) -> None:

@@ -269,7 +269,9 @@ def test_cierra_solo_el_chrome_que_abrio_el_bot(monkeypatch):
     monkeypatch.setattr(worker, "_BOT_OPENED", {})
     abiertos = {"127.0.0.1:9223"}  # Chrome de Dylan ya abierto por la persona
     monkeypatch.setattr(worker, "chrome_status", lambda address: (address in abiertos, "Chrome"))
-    monkeypatch.setattr(worker.subprocess, "Popen", lambda *a, **k: abiertos.add("127.0.0.1:9222"))
+    monkeypatch.setattr(
+        worker.marketplace_platform, "open_chrome", lambda account, port, profile: abiertos.add(f"127.0.0.1:{port}")
+    )
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: None)
 
     assert worker.ensure_chrome("sebastian", {"debugger_address": "127.0.0.1:9222"})[0]

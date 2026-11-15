@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -25,13 +27,42 @@ def images_root(base: Path = SCRATCH_DIR) -> Path:
     return legacy if not current.exists() and legacy.is_dir() else current
 
 
+# La base, los trabajos y la campana guardan las fotos con la ruta completa de
+# Windows (C:\Users\...\imagenes_productos\CMP-BLA\foto_1.jpg). En la Mac
+# esa ruta no existe: hay que buscar la misma foto en la carpeta de fotos local.
+TRANSLATE_WINDOWS_PATHS = os.name != "nt"
+WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def relocate_images_path(raw: str, base: Path | None = None) -> Path | None:
+    """La misma foto dentro de la carpeta de fotos de ``base``, o None si la ruta no es de fotos."""
+    parts = [part for part in re.split(r"[\\/]+", str(raw)) if part]
+    for index in range(len(parts) - 1, -1, -1):
+        if parts[index] in (IMAGES_DIR_NAME, LEGACY_IMAGES_DIR_NAME):
+            return images_root(SCRATCH_DIR if base is None else base).joinpath(*parts[index + 1:])
+    return None
+
+
+def local_path(value: str | Path) -> Path:
+    """Ruta guardada por el bot, valida en esta computadora.
+
+    Solo cambia el texto (no mira el disco), asi que se puede cachear.
+    """
+    text = str(value)
+    if TRANSLATE_WINDOWS_PATHS and WINDOWS_ABSOLUTE.match(text):
+        moved = relocate_images_path(text)
+        if moved is not None:
+            return moved
+    return Path(text)
+
+
 def alias_images_path(path: Path) -> Path:
     """Traduce una ruta guardada con el nombre anterior (o el nuevo) al que existe.
 
     Los trabajos y campanas guardados antes del cambio de nombre apuntan a
     ``imagenes_firupost``; los nuevos, a ``imagenes_productos``.
     """
-    path = Path(path)
+    path = local_path(path)
     if path.exists():
         return path
     for source, target in (
@@ -135,9 +166,42 @@ def process_wrote(pid: int, written_at: float) -> bool:
     if not process_exists(pid):
         return False
     if os.name != "nt":
-        return True
+        # La Mac tambien reutiliza los numeros al reiniciar. Si ps no responde se
+        # da por vivo, como antes, para no arrancar dos trabajadores.
+        started = _posix_process_started_at(pid)
+        return started is None or started <= written_at + PID_CLOCK_MARGIN_SECONDS
     started = _windows_process_started_at(pid)
     return started is not None and started <= written_at + PID_CLOCK_MARGIN_SECONDS
+
+
+def parse_elapsed(text: str) -> int | None:
+    """Segundos de ``ps -o etime`` (``[[dd-]hh:]mm:ss``)."""
+    text = text.strip()
+    days = 0
+    if "-" in text:
+        day_text, text = text.split("-", 1)
+        if not day_text.isdigit():
+            return None
+        days = int(day_text)
+    pieces = text.split(":")
+    if not 2 <= len(pieces) <= 3 or not all(piece.isdigit() for piece in pieces):
+        return None
+    seconds = 0
+    for piece in pieces:
+        seconds = seconds * 60 + int(piece)
+    return days * 86400 + seconds
+
+
+def _posix_process_started_at(pid: int) -> float | None:
+    """Cuando arranco el proceso segun ps (Mac y Linux), o None si no se sabe."""
+    try:
+        completed = subprocess.run(
+            ["ps", "-o", "etime=", "-p", str(int(pid))], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    elapsed = parse_elapsed(completed.stdout) if completed.returncode == 0 else None
+    return None if elapsed is None else time.time() - elapsed
 
 
 class AccountLock:

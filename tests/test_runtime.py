@@ -66,6 +66,7 @@ def test_un_candado_cuyo_numero_paso_a_otro_proceso_se_libera(monkeypatch, tmp_p
     candado.release()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="solo Windows niega abrir procesos del sistema")
 def test_un_candado_cuyo_numero_paso_a_un_proceso_del_sistema_se_libera(monkeypatch, tmp_path):
     """Asi quedo el 5 de noviembre: el proceso existe pero Windows no deja abrirlo."""
     monkeypatch.setattr(marketplace_runtime, "LOCKS_DIR", tmp_path)

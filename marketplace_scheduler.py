@@ -10,6 +10,7 @@ from typing import Any
 
 from marketplace_catalog import ASSISTANT_PRESETS, build_family_jobs, catalog_families
 from marketplace_custom_products import custom_rotation_jobs
+from marketplace_runtime import local_path
 import marketplace_leads
 from marketplace_safety import load_safety, warmup_cap
 from marketplace_storage import DEFAULT_DB, MarketplaceStore, listing_fingerprint
@@ -232,7 +233,7 @@ def job_for_account(
         # Una seleccion guardada antes del SGI apunta a carpetas con codigos
         # viejos (TSBK-M): esas fotos ya no son de la familia y no se publican.
         assigned = [
-            path for path in assigned if Path(path).parent.name.upper().startswith(prefixes) and Path(path).is_file()
+            path for path in assigned if local_path(path).parent.name.upper().startswith(prefixes) and local_path(path).is_file()
         ]
     if assigned:
         overrides = dict(job.get("listing_overrides") or {})

@@ -62,9 +62,12 @@ privado que utilice el negocio.
 
 Si agregas un modulo `.py` nuevo al bot, anadelo tambien a la lista `$files` de
 `preparar_paquete_socios.ps1`; un modulo olvidado hace que el panel no arranque en
-la copia del socio.
+la copia del socio. La prueba `tests/test_paquete_socios.py` avisa si falta alguno.
 
 ## 3. Requisitos de otra computadora
+
+Si el socio usa una Mac, sigue [`GUIA_MAC.md`](GUIA_MAC.md) en lugar de las
+secciones 3, 4 y 9. El ZIP es el mismo.
 
 - Windows 10 u 11.
 - Google Chrome instalado.

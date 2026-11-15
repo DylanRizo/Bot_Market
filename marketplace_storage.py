@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from marketplace_runtime import local_path
+
 
 SCRATCH_DIR = Path(__file__).resolve().parent
 
@@ -47,7 +49,7 @@ def resolved_path(raw: str) -> Path:
     Resolver es una operacion sobre el texto de la ruta, asi que cachearla es
     seguro: la existencia del archivo se sigue comprobando aparte.
     """
-    return Path(raw).resolve()
+    return local_path(raw).resolve()
 
 
 def now_iso() -> str:

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
+from marketplace_platform import default_profile_dir
 from marketplace_runtime import images_root
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
@@ -26,7 +27,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 SCRATCH_DIR = Path(__file__).resolve().parent
 DEFAULT_EXCEL = SCRATCH_DIR / "ArticulosGenerados.xlsx"
 DEFAULT_IMAGES = images_root(SCRATCH_DIR)
-DEFAULT_PROFILE = Path.home() / "AppData" / "Local" / "MarketplaceBot_cuenta1"
+DEFAULT_PROFILE = default_profile_dir("cuenta1")
 CREATE_URL = "https://www.facebook.com/marketplace/create/item"
 FAILURES_DIR = Path(__file__).resolve().parent / "marketplace_failures"
 
@@ -293,8 +294,8 @@ def chrome_driver(args: argparse.Namespace) -> webdriver.Chrome:
     except WebDriverException as exc:
         raise RuntimeError(
             "No pude abrir Chrome con Selenium. Si ya tienes Chrome abierto con "
-            "el perfil de la cuenta, cierralo o abre la sesion con "
-            "abrir_sesion_marketplace_cuenta.ps1."
+            "el perfil de la cuenta, cierralo o abre la sesion con el boton "
+            "Abrir sesion del panel."
         ) from exc
 
 
@@ -660,7 +661,7 @@ def ensure_marketplace_session(driver: webdriver.Chrome) -> None:
     if login_inputs or "Email or phone" in body_text or "Log In" in body_text:
         raise RuntimeError(
             "La sesion de Facebook no esta iniciada en el perfil de la cuenta. "
-            "Ejecuta abrir_sesion_marketplace_cuenta.ps1, inicia sesion manualmente "
+            "Abre la sesion con el boton Abrir sesion del panel, inicia sesion manualmente "
             "y vuelve a correr esta prueba."
         )
     if "/marketplace/create/item" not in current_url:

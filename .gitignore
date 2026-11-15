@@ -21,6 +21,7 @@ marketplace_publish_intents/
 
 # --- Artefactos generados ---
 __pycache__/
+.venv-mac/
 *.py[cod]
 .pytest_cache/
 ArticulosGenerados.xlsx

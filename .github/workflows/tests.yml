@@ -8,7 +8,12 @@ on:
 
 jobs:
   pytest:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # El bot corre en Windows y en Mac.
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 

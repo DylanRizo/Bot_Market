@@ -25,8 +25,8 @@ Drive y de una carpeta local de respaldo.
   su historial y sus alertas.
 - **Descripciones y etiquetas.** Redaccion comercial local, u opcionalmente
   generada por una API compatible con OpenAI.
-- **Trabajador permanente.** Corre como tarea de Windows: el calendario avanza
-  aunque el panel este cerrado, y sobrevive a reinicios.
+- **Trabajador permanente.** Corre como tarea de Windows (o con launchd en la
+  Mac): el calendario avanza aunque el panel este cerrado, y sobrevive a reinicios.
 - **Proteccion de cuenta.** Antes de cada anuncio real aplica limites por
   cuenta (al dia, en 7 dias y separacion minima), calienta las cuentas nuevas,
   separa las cuentas entre si, varia la redaccion por cuenta, bloquea enlaces y
@@ -54,10 +54,9 @@ Por defecto el bot arranca en `Supervisado` y con `Bot activo` apagado.
 
 ## Requisitos
 
-Windows 10 u 11, Google Chrome, Python 3.10 a 3.12 y una cuenta de Facebook con
-acceso a Marketplace. El cifrado de claves usa DPAPI, por lo que el bot solo
-funciona en Windows (la suite de pruebas si corre en cualquier sistema con
-dependencias instaladas).
+Windows 10 u 11 o una Mac, Google Chrome, Python 3.10 a 3.12 y una cuenta de
+Facebook con acceso a Marketplace. Las claves se guardan cifradas con DPAPI en
+Windows y en el Llavero en la Mac. Para la Mac mira [`GUIA_MAC.md`](GUIA_MAC.md).
 
 ## Puesta en marcha
 
@@ -127,6 +126,9 @@ sgi_client.py                    lectura del catalogo del SGI con la llave de in
 drive_photos.py                  fotos de producto desde Google Drive (solo lectura)
 sgi_sync.py                      genera el Excel y las carpetas de fotos desde SGI + Drive
 *.ps1                            iniciadores de Windows (panel, trabajador, sesiones, paquete)
+*.command, *.sh                  iniciadores de la Mac (instalar, panel, trabajador)
+marketplace_platform.py          lo que cambia entre Windows y Mac (Chrome, procesos, llaves)
+instalar_trabajador_mac.py       trabajador permanente en la Mac (launchd)
 tests/                           suite de regresion
 ```
 
@@ -147,12 +149,14 @@ Corren sin red, sin navegador y contra una base temporal, nunca contra la real
 la proteccion de cuenta, las reglas que evitan anuncios duplicados, la redaccion
 de anuncios, el catalogo, el cliente del SGI, las fotos de Drive y el panel. Una
 accion de GitHub (`.github/workflows/tests.yml`) las corre en cada push y pull
-request. Conviene correrlas antes de tocar el publicador o el planificador.
+request, en Windows y en Mac. Conviene correrlas antes de tocar el publicador o
+el planificador.
 
 ## Documentacion
 
 - [`MANUAL_OPERACION.md`](MANUAL_OPERACION.md) — uso diario: reglas, proteccion, fotos, alertas, comandos
 - [`GUIA_SOCIOS_MARKETPLACE_BOT.md`](GUIA_SOCIOS_MARKETPLACE_BOT.md) — instalacion en computadoras de terceros
+- [`GUIA_MAC.md`](GUIA_MAC.md) — instalar el bot en una Mac o pasarlo de la PC a la Mac
 - [`PLAN_BOT_MARKETPLACE_AUTONOMO.md`](PLAN_BOT_MARKETPLACE_AUTONOMO.md) — diseno por fases y estado
 - [`marketplace_campaign_modes.md`](marketplace_campaign_modes.md) — campanas JSON manuales
 

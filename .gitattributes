@@ -1,0 +1,4 @@
+# Los scripts de la Mac deben quedar con finales de linea LF aunque se
+# descarguen en Windows: con CRLF bash falla al abrirlos.
+*.sh text eol=lf
+*.command text eol=lf

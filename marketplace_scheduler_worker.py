@@ -12,7 +12,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from marketplace_runtime import alias_images_path
+import marketplace_platform
+from marketplace_runtime import alias_images_path, local_path
 from marketplace_safety import backfill_events, check_can_publish
 from marketplace_safety import load_safety
 from marketplace_scheduler import apply_photo_order, generate_week, load_config, schedule_window
@@ -26,7 +27,6 @@ ACCOUNTS_PATH = SCRATCH_DIR / "marketplace_accounts.json"
 ACTIVITY_PATH = SCRATCH_DIR / "marketplace_activity.json"
 WORKER_JOBS_DIR = SCRATCH_DIR / "marketplace_worker_jobs"
 PUBLISH_INTENTS_DIR = SCRATCH_DIR / "marketplace_publish_intents"
-OPEN_SESSION_SCRIPT = SCRATCH_DIR / "abrir_sesion_marketplace_cuenta.ps1"
 
 BLOCKING_ERRORS = {
     "SESSION_BLOCKED", "PUBLISH_OUTCOME_UNKNOWN", "DATA_INVALID", "IMAGE_REUSED",
@@ -131,15 +131,10 @@ def ensure_chrome(account_key: str, account: dict[str, Any]) -> tuple[bool, str]
         port = int(address.rsplit(":", 1)[-1])
     except (TypeError, ValueError):
         return False, detail
-    profile = os.path.expandvars(str(account.get("chrome_profile") or ""))
-    command = [
-        "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(OPEN_SESSION_SCRIPT),
-        "-Account", account_key, "-Port", str(port),
-    ]
-    if profile:
-        command.extend(["-ProfileDir", profile])
-    creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-    subprocess.Popen(command, cwd=str(SCRATCH_DIR), creationflags=creation_flags)
+    try:
+        marketplace_platform.open_chrome(account_key, port, str(account.get("chrome_profile") or ""))
+    except (OSError, RuntimeError) as exc:
+        return False, f"No pude abrir Chrome: {exc}"
     deadline = time.monotonic() + CHROME_START_SECONDS
     while time.monotonic() < deadline:
         time.sleep(2)
@@ -153,7 +148,7 @@ def ensure_chrome(account_key: str, account: dict[str, Any]) -> tuple[bool, str]
 def resolve_path(value: str | None) -> Path | None:
     if not value:
         return None
-    path = Path(value)
+    path = local_path(value)
     return alias_images_path(path if path.is_absolute() else SCRATCH_DIR / path)
 
 

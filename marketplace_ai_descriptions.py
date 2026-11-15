@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from marketplace_platform import SecretStoreMissing, load_secret, save_secret
+
 
 DEFAULT_MODEL = os.environ.get("OPENAI_MODEL") or os.environ.get("FIRUPOST_OPENAI_MODEL") or "gpt-5.6-luna"
 DEFAULT_TONE = "directo, cercano y profesional"
@@ -31,15 +33,7 @@ def load_api_key() -> str:
     if environment_key:
         return environment_key
     secret_path = SECRET_PATH if SECRET_PATH.is_file() else LEGACY_SECRET_PATH
-    if not secret_path.is_file():
-        return ""
-    try:
-        import win32crypt
-
-        encrypted = secret_path.read_bytes()
-        return win32crypt.CryptUnprotectData(encrypted, None, None, None, 0)[1].decode("utf-8").strip()
-    except Exception:
-        return ""
+    return load_secret("openai_api_key", secret_path)
 
 
 def save_api_key(api_key: str) -> None:
@@ -47,20 +41,10 @@ def save_api_key(api_key: str) -> None:
     if len(key) < 20:
         raise ValueError("La clave de OpenAI no parece valida.")
     try:
-        import win32crypt
-
-        encrypted = win32crypt.CryptProtectData(
-            key.encode("utf-8"),
-            "Marketplace Bot OpenAI API key",
-            None,
-            None,
-            None,
-            0,
-        )
-        SECRET_PATH.write_bytes(encrypted)
-        os.environ["OPENAI_API_KEY"] = key
-    except ImportError as exc:
+        save_secret("openai_api_key", SECRET_PATH, key, "Marketplace Bot OpenAI API key")
+    except SecretStoreMissing as exc:
         raise RuntimeError("En este equipo configura OPENAI_API_KEY como variable de entorno.") from exc
+    os.environ["OPENAI_API_KEY"] = key
 
 
 def ai_status() -> dict[str, Any]:

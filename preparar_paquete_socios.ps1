@@ -23,8 +23,13 @@ $files = @(
     "marketplace_bot_dashboard.py",
     "marketplace_campaign_runner.py",
     "marketplace_catalog.py",
+    "marketplace_copy.py",
     "marketplace_custom_products.py",
+    "marketplace_leads.py",
     "marketplace_listing_builder.py",
+    "marketplace_listing_worker.py",
+    "marketplace_listings.py",
+    "marketplace_platform.py",
     "marketplace_runtime.py",
     "marketplace_safety.py",
     "marketplace_scheduler.py",
@@ -38,8 +43,13 @@ $files = @(
     "ejecutar_trabajador_marketplace.ps1",
     "iniciar_panel_marketplace.ps1",
     "instalar_trabajador_marketplace.ps1",
+    "instalar_mac.command",
+    "iniciar_panel_marketplace.command",
+    "ejecutar_trabajador_marketplace.sh",
+    "instalar_trabajador_mac.py",
     "requirements_marketplace_bot.txt",
     "GUIA_SOCIOS_MARKETPLACE_BOT.md",
+    "GUIA_MAC.md",
     "MANUAL_OPERACION.md"
 )
 
