@@ -279,6 +279,25 @@ def test_el_trabajador_ejecuta_la_accion_aprobada(store, cuentas):
     assert lw.scan_due(store, "cuenta1"), "tras actuar se vuelve a leer para ver el cambio"
 
 
+def test_una_renovacion_en_espera_por_el_tope_no_abre_chrome(store, cuentas):
+    cards_para(store, "cuenta1", *[tarjeta(f"Anuncio {i}", fecha="9/10") for i in range(4)])
+    items = listings.list_listings(store)
+    for item in items[:3]:
+        listings.finish_action(store, listings.queue_action(store, item["key"], "renew"), "done", "ok")
+    espera = listings.queue_action(store, items[3]["key"], "renew")
+    store.heartbeat(lw.scan_state_key("cuenta1"), {"status": "ok", "attempted_at_epoch": 9e12})
+    abiertos = []
+
+    def chrome(key, account):
+        abiertos.append(key)
+        return True, "ok"
+
+    assert not lw.run_listing_work(store, CONFIG, chrome, log=lambda m: None, run=lambda c: (0, ""))
+    assert abiertos == []
+    fila = next(p for p in listings.pending_actions(store) if p["id"] == espera)
+    assert "renovaron" in fila["detail"]
+
+
 def test_una_restriccion_al_actuar_pausa_la_cuenta(store, cuentas):
     from marketplace_safety import active_pauses
 

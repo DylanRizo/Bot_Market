@@ -296,6 +296,14 @@ def run_listing_work(
         last = float(store.worker_state(action_state_key(row["account"])).get("at_epoch") or 0)
         if time.time() - last < ACTION_GAP_SECONDS:
             continue
+        # Los limites se revisan antes de abrir Chrome. El 15 de noviembre una
+        # renovacion en espera por el tope diario abrio y cerro el Chrome de una
+        # cuenta unas 800 veces, una cada 35 segundos.
+        allowed, why = listings.action_allowed(store, row["account"], row["action"])
+        if not allowed:
+            with store.connect() as connection:
+                connection.execute("UPDATE listing_actions SET detail=? WHERE id=?", (f"En espera: {why}"[:500], row["id"]))
+            continue
         ok, detail = ensure_chrome(row["account"], account)
         if not ok:
             continue
