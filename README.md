@@ -166,6 +166,48 @@ Automatizar Facebook Marketplace puede chocar con las condiciones de uso de
 Facebook. Usalo sobre cuentas propias y bajo tu responsabilidad. El proyecto se
 publica sin garantia de ningun tipo.
 
+## Monitor del SGI
+
+El trabajador local puede enviar al SGI el estado de las cuentas, los interesados,
+las recomendaciones y el calendario. La vista se encuentra en **Bot Marketplace**.
+El pulso se intenta cada 30 segundos entre ciclos del trabajador, incluso cuando
+las publicaciones están pausadas.
+
+En **Configuración → Integraciones** del SGI, crea una llave de sincronización del
+bot y elige un identificador estable para esta instalación. Copia ese identificador
+en `sgi.monitor.instance_key` de `marketplace_integrations.json`, define un
+`instance_name` y activa `enabled`. El archivo de ejemplo muestra la estructura.
+
+Guarda la llave desde esta carpeta con la misma cuenta que ejecuta el trabajador.
+Windows usa DPAPI y Mac usa el Llavero, con una entrada propia del monitor.
+
+```powershell
+python -c "from getpass import getpass; from sgi_monitor import save_monitor_key; save_monitor_key(getpass('Llave del monitor: '))"
+```
+
+Reinicia el trabajador y comprueba la hora del último pulso en el SGI. Al vencer
+la llave, crea otra para el mismo identificador y guárdala con el mismo comando.
+La variable `SGI_MONITOR_KEY` permite proporcionar la llave al proceso.
+
+El control remoto requiere `MARKETPLACE_BOT_CONTROL_ENABLED=true` en el SGI y
+`sgi.monitor.control_enabled=true` en la configuración local. Su activación sigue
+el gate operacional del SGI y exige que la cuenta tenga `integrations.manage`.
+Las opciones desactivadas mantienen el modo de consulta.
+
+El cliente guarda el ID y el resultado de cada orden en los ajustes de su base
+local antes de confirmar el resultado al SGI. Un reenvío conserva el resultado
+guardado. Una orden vencida se rechaza. Si el proceso se interrumpe durante una
+acción, la siguiente conexión informa que requiere verificar el estado local
+antes de solicitarla otra vez. Los resultados se conservan hasta que el SGI
+confirme su recepción.
+
+Las acciones sobre anuncios y las solicitudes de revisión se añaden a la cola
+local y las ejecuta el trabajador cuando está activo. El resultado de la orden
+confirma esa solicitud, y el monitor permite seguir su ejecución posterior.
+
+Los pulsos incluyen una proyección comercial acotada. Los mensajes y datos de
+contacto de compradores permanecen en el equipo local.
+
 ## Licencia
 
 MIT. Ver [LICENSE](LICENSE).

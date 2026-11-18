@@ -1,6 +1,12 @@
 {
   "sgi": {
-    "base_url": "https://api-sgi.example.com"
+    "base_url": "https://api-sgi.example.com",
+    "monitor": {
+      "enabled": false,
+      "control_enabled": false,
+      "instance_key": "comarca-local-01",
+      "instance_name": "Marketplace local"
+    }
   },
   "drive": {
     "root_folder_ids": ["ID_DE_LA_CARPETA_DE_PUBLICIDAD_CON_LAS_FOTOS"],

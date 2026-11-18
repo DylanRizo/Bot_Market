@@ -18,6 +18,8 @@ from marketplace_safety import backfill_events, check_can_publish
 from marketplace_safety import load_safety
 from marketplace_scheduler import apply_photo_order, generate_week, load_config, schedule_window
 from marketplace_storage import DEFAULT_DB, MarketplaceStore, now_iso
+from sgi_client import SgiError
+from sgi_monitor import send_configured_snapshot
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
@@ -770,8 +772,17 @@ def main() -> None:
         backfill_events(store, ACTIVITY_PATH)
     except Exception as exc:  # noqa: BLE001 - sin historial los limites arrancan en cero.
         log(f"No pude cargar el historial de publicaciones: {exc}")
+    next_monitor_at = 0.0
     while True:
         arm_hang_guard()
+        if time.monotonic() >= next_monitor_at:
+            next_monitor_at = time.monotonic() + 30
+            try:
+                send_configured_snapshot(store, load_config(store))
+            except SgiError as exc:
+                log(f"No se pudo enviar el pulso del monitor: {exc.code}")
+            except Exception as exc:  # noqa: BLE001 - el monitor no debe detener al trabajador.
+                log(f"No se pudo preparar el pulso del monitor: {type(exc).__name__}")
         try:
             worked = run_once(store)
         except KeyboardInterrupt:

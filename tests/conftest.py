@@ -24,6 +24,7 @@ def sin_sgi_real(monkeypatch):
     import marketplace_scheduler_worker as worker
 
     monkeypatch.setattr(worker, "sgi_configured", lambda: False)
+    monkeypatch.setattr(worker, "send_configured_snapshot", lambda store, config: False)
 
 
 @pytest.fixture(autouse=True)
