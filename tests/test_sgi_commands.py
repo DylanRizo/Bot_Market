@@ -47,6 +47,7 @@ def local_config(store, monkeypatch, tmp_path):
     "SET_BOT_ENABLED", "GENERATE_WEEK", "APPROVE_QUEUE_ITEMS", "QUEUE_ITEM_ACTION",
     "LISTING_ACTION", "CANCEL_LISTING_ACTION", "REQUEST_SCAN", "SYNC_SGI_CATALOG",
     "PAUSE_ACCOUNT", "RESUME_ACCOUNT", "SET_SAFETY_LEVEL", "RESOLVE_ALERT", "RESOLVE_ALL_ALERTS",
+    "SET_SCHEDULE",
 ])
 def test_every_sgi_command_has_one_durable_execution(store, journal, monkeypatch, kind):
     handler = Mock(return_value="Confirmado")
@@ -326,3 +327,86 @@ def test_manual_retry_clears_only_its_own_publishing_intent(store, journal, loca
     commands.execute_command(store, journal, order({"type": "QUEUE_ITEM_ACTION", "id": queue_id, "action": "retry"}))
     assert not path.exists()
     assert store.get_queue_item(queue_id)["status"] == "queued"
+
+
+# --- horario, mover y publicar ya ------------------------------------------
+
+def horario(**cambios):
+    payload = {"type": "SET_SCHEDULE", "activeDays": [0, 2, 4], "startTime": "10:00", "endTime": "16:30",
+               "maxPerDay": 2, "intervalMinutes": 120, "regenerate": False}
+    payload.update(cambios)
+    return payload
+
+
+def test_schedule_changes_only_the_window_and_limits(store, journal, local_config):
+    commands.execute_command(store, journal, order(horario()))
+    config = scheduler.load_config(store)
+    assert (config["active_days"], config["start_time"], config["end_time"]) == ([0, 2, 4], "10:00", "16:30")
+    assert (config["max_per_day"], config["interval_minutes"]) == (2, 120)
+    assert config["accounts"] == ["shop"] and config["enabled"] is False
+    assert journal.pending_results()[0]["status"] == "COMPLETED"
+
+
+def test_schedule_can_rebuild_the_calendar(store, journal, local_config, monkeypatch):
+    called = []
+    monkeypatch.setattr(scheduler, "cancel_future", lambda value: called.append("cancel"))
+    monkeypatch.setattr(scheduler, "generate_week", lambda value, config: called.append(config["start_time"]))
+    commands.execute_command(store, journal, order(horario(regenerate=True)))
+    assert called == ["cancel", "10:00"]
+
+
+@pytest.mark.parametrize("cambios, motivo", [
+    ({"startTime": "18:00", "endTime": "09:00"}, "hora final"),
+    ({"activeDays": []}, "al menos un día"),
+    ({"activeDays": [7]}, "al menos un día"),
+    ({"maxPerDay": 0}, "máximo por día"),
+    ({"intervalMinutes": 10}, "separación"),
+    ({"startTime": "9:00"}, "Horario no válido"),
+    ({"regenerate": "si"}, "verdadera o falsa"),
+])
+def test_invalid_schedule_keeps_the_settings_and_explains_why(store, journal, local_config, cambios, motivo):
+    before = scheduler.load_config(store)
+    commands.execute_command(store, journal, order(horario(**cambios)))
+    result = journal.pending_results()[0]
+    assert result["status"] == "FAILED" and motivo in result["detail"]
+    assert scheduler.load_config(store) == before
+
+
+def test_move_sets_a_future_time(store, journal):
+    queue_id = enqueue_job(store, status="planned", approved=False)
+    later = (datetime.now() + timedelta(days=1)).replace(second=0, microsecond=0)
+    commands.execute_command(store, journal, order({"type": "QUEUE_ITEM_ACTION", "id": queue_id, "action": "move",
+                                                    "scheduledAt": later.strftime("%Y-%m-%dT%H:%M")}))
+    assert store.get_queue_item(queue_id)["scheduled_at"] == later.isoformat(timespec="seconds")
+    assert store.get_queue_item(queue_id)["approved"] is False
+    assert "movida" in journal.pending_results()[0]["detail"]
+
+
+@pytest.mark.parametrize("valor, motivo", [
+    ((datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M"), "futuro"),
+    ("mañana", "no válidas"),
+    (None, "no válidas"),
+])
+def test_move_rejects_past_or_malformed_times(store, journal, valor, motivo):
+    queue_id = enqueue_job(store, status="planned", approved=False)
+    before = store.get_queue_item(queue_id)["scheduled_at"]
+    commands.execute_command(store, journal, order({"type": "QUEUE_ITEM_ACTION", "id": queue_id, "action": "move",
+                                                    "scheduledAt": valor}))
+    assert store.get_queue_item(queue_id)["scheduled_at"] == before
+    result = journal.pending_results()[0]
+    assert result["status"] == "FAILED" and motivo in result["detail"]
+
+
+def test_publish_now_approves_and_makes_it_due(store, journal):
+    queue_id = enqueue_job(store, status="planned", approved=False, scheduled_at="2099-01-01T09:00:00")
+    commands.execute_command(store, journal, order({"type": "QUEUE_ITEM_ACTION", "id": queue_id, "action": "publish_now"}))
+    item = store.get_queue_item(queue_id)
+    assert item["status"] == "queued" and item["approved"] is True
+    assert item["scheduled_at"] <= datetime.now().isoformat(timespec="seconds")
+
+
+def test_published_items_cannot_be_moved(store, journal):
+    queue_id = enqueue_job(store, status="published")
+    commands.execute_command(store, journal, order({"type": "QUEUE_ITEM_ACTION", "id": queue_id, "action": "publish_now"}))
+    assert store.get_queue_item(queue_id)["status"] == "published"
+    assert "pendientes" in journal.pending_results()[0]["detail"]

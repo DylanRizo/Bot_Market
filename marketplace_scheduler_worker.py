@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta
@@ -19,7 +20,7 @@ from marketplace_safety import load_safety
 from marketplace_scheduler import apply_photo_order, generate_week, load_config, schedule_window
 from marketplace_storage import DEFAULT_DB, MarketplaceStore, now_iso
 from sgi_client import SgiError
-from sgi_monitor import send_configured_snapshot
+from sgi_monitor import pending_result_count, send_configured_snapshot
 
 
 SCRATCH_DIR = Path(__file__).resolve().parent
@@ -753,6 +754,57 @@ def register_pid(path: Path = WORKER_PID_PATH) -> None:
     atexit.register(cleanup)
 
 
+MONITOR_EVERY_SECONDS = 30
+MONITOR_TIMEOUT_SECONDS = 45
+# Una vuelta del trabajador (publicar, renovar, leer anuncios) y una orden del
+# SGI no corren a la vez: las ordenes se ejecutan cuando el trabajador esta libre.
+WORK_LOCK = threading.Lock()
+
+
+def monitor_pulse(store: MarketplaceStore, send=None, pending=None) -> str:
+    """Un pulso al SGI. Ocupado, solo informa; libre, recibe y ejecuta ordenes.
+
+    Devuelve "idle", "busy", "off" o "error" (para las pruebas y el registro)."""
+    # Se resuelven al llamar: las pruebas reemplazan el envio real.
+    send = send or send_configured_snapshot
+    pending = pending or pending_result_count
+    idle = WORK_LOCK.acquire(blocking=False)
+    try:
+        config = load_config(store)
+        if not send(store, config, accept_commands=idle, timeout=MONITOR_TIMEOUT_SECONDS):
+            return "off"
+        # Con ordenes recien ejecutadas, el resultado se entrega en seguida en
+        # vez de esperar el siguiente pulso.
+        for _ in range(3):
+            if not idle or not pending(store):
+                break
+            send(store, config, accept_commands=True, timeout=MONITOR_TIMEOUT_SECONDS)
+        return "idle" if idle else "busy"
+    except SgiError as exc:
+        log(f"No se pudo enviar el pulso del monitor: {exc.code}")
+        return "error"
+    except Exception as exc:  # noqa: BLE001 - el monitor no debe detener al trabajador.
+        log(f"No se pudo preparar el pulso del monitor: {type(exc).__name__}")
+        return "error"
+    finally:
+        if idle:
+            WORK_LOCK.release()
+
+
+def start_monitor_thread(store: MarketplaceStore) -> threading.Event:
+    """El pulso corre aparte: mientras el trabajador publica, el SGI sigue viendo al bot."""
+    stop = threading.Event()
+
+    def loop() -> None:
+        while True:
+            monitor_pulse(store)
+            if stop.wait(MONITOR_EVERY_SECONDS):
+                return
+
+    threading.Thread(target=loop, name="sgi-monitor", daemon=True).start()
+    return stop
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Trabajador persistente del calendario de Marketplace.")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -772,19 +824,15 @@ def main() -> None:
         backfill_events(store, ACTIVITY_PATH)
     except Exception as exc:  # noqa: BLE001 - sin historial los limites arrancan en cero.
         log(f"No pude cargar el historial de publicaciones: {exc}")
-    next_monitor_at = 0.0
+    if args.once:
+        monitor_pulse(store)
+    else:
+        start_monitor_thread(store)
     while True:
         arm_hang_guard()
-        if time.monotonic() >= next_monitor_at:
-            next_monitor_at = time.monotonic() + 30
-            try:
-                send_configured_snapshot(store, load_config(store))
-            except SgiError as exc:
-                log(f"No se pudo enviar el pulso del monitor: {exc.code}")
-            except Exception as exc:  # noqa: BLE001 - el monitor no debe detener al trabajador.
-                log(f"No se pudo preparar el pulso del monitor: {type(exc).__name__}")
         try:
-            worked = run_once(store)
+            with WORK_LOCK:
+                worked = run_once(store)
         except KeyboardInterrupt:
             store.heartbeat("scheduler", {"status": "stopped"})
             raise

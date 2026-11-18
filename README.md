@@ -205,6 +205,13 @@ Las acciones sobre anuncios y las solicitudes de revisión se añaden a la cola
 local y las ejecuta el trabajador cuando está activo. El resultado de la orden
 confirma esa solicitud, y el monitor permite seguir su ejecución posterior.
 
+El pulso corre en un hilo propio cada 30 segundos, también mientras el
+trabajador publica. Ocupado, solo informa qué publica y entrega resultados; las
+órdenes nuevas se ejecutan apenas termina. Desde el SGI se puede cambiar el
+horario de publicación (días, horas, máximo diario y separación), mover una
+publicación pendiente o publicarla ya, siempre dentro del horario y los límites
+de seguridad.
+
 Los pulsos incluyen una proyección comercial acotada. Los mensajes y datos de
 contacto de compradores permanecen en el equipo local.
 

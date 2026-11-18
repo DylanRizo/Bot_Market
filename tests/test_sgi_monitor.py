@@ -1,6 +1,8 @@
 import io
 import json
 import unittest
+
+import pytest
 from datetime import date, timedelta
 from unittest.mock import MagicMock, Mock, patch
 
@@ -152,3 +154,51 @@ def test_enabled_monitor_uses_platform_secret_store_without_catalog_key(monkeypa
         assert monitor.send_configured_snapshot(Mock(), {}) is True
     secret.assert_called_once_with("sgi_monitor_key", monitor.MONITOR_SECRET_PATH)
     assert send.call_args.args[:4] == ("https://sgi.example.com", "x" * 43, "demo-bot", "Demo bot")
+
+
+
+def test_snapshot_reports_schedule_running_item_and_queue_detail(store):
+    from conftest import enqueue_job
+
+    enqueue_job(store, status="running", name="Calcetas", dedupe_key="a")
+    enqueue_job(store, status="planned", approved=False, detail="Volver a publicar", dedupe_key="b",
+                fingerprint="huella-2")
+    config = {"accounts": [], "enabled": True, "mode": "semiautomatic", "active_days": [1, 3],
+              "start_time": "08:00", "end_time": "12:00", "max_per_day": 2, "interval_minutes": 90}
+    snapshot = build_snapshot(store, config)
+    assert snapshot["worker"]["status"] == "running" and snapshot["worker"]["currentItem"] == "Calcetas"
+    assert snapshot["schedule"]["activeDays"] == [1, 3]
+    assert (snapshot["schedule"]["startTime"], snapshot["schedule"]["endTime"]) == ("08:00", "12:00")
+    assert any(item["detail"] == "Volver a publicar" for item in snapshot["queue"]["upcoming"])
+
+
+def test_busy_pulse_reports_results_without_asking_for_commands():
+    response = Mock(return_value=io.BytesIO(json.dumps({"data": {"pendingCommands": []}}).encode()))
+    results = [{"id": "x", "status": "COMPLETED", "detail": "ok"}]
+    send_snapshot("https://sgi.example.com", "x" * 43, "demo-bot", "Demo", {}, control_enabled=True,
+                  accept_commands=False, command_results=results, open_request=response)
+    body = json.loads(response.call_args.args[0].data)
+    assert "commandProtocolVersion" not in body and body["commandResults"] == results
+    busy_with_orders = Mock(return_value=io.BytesIO(json.dumps({"data": {"pendingCommands": [{}]}}).encode()))
+    with pytest.raises(SgiError):
+        send_snapshot("https://sgi.example.com", "x" * 43, "demo-bot", "Demo", {}, control_enabled=True,
+                      accept_commands=False, open_request=busy_with_orders)
+
+
+def test_pulse_runs_orders_only_when_the_worker_is_free(store):
+    import marketplace_scheduler_worker as worker
+
+    calls = []
+
+    def send(store, config, *, accept_commands, timeout):
+        calls.append(accept_commands)
+        return True
+
+    pending = Mock(side_effect=[1, 0])
+    assert worker.monitor_pulse(store, send, pending) == "idle"
+    assert calls == [True, True]  # pulso normal y entrega inmediata del resultado
+    calls.clear()
+    with worker.WORK_LOCK:
+        assert worker.monitor_pulse(store, send, Mock(return_value=5)) == "busy"
+    assert calls == [False]
+    assert not worker.WORK_LOCK.locked()

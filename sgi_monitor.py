@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from collections import Counter
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import marketplace_leads as leads
@@ -67,13 +67,23 @@ def build_snapshot(store: MarketplaceStore, config: dict[str, Any]) -> dict[str,
             "pausedUntil": (health["pause"] or {}).get("until"),
         })
 
+    running = store.list_queue(statuses=["running"], limit=1)
     return {
         "worker": {
             "processRunning": True,
-            "status": scheduler["status"],
+            "status": "running" if running else scheduler["status"],
+            "currentItem": running[0]["name"] if running else None,
             "enabled": config["enabled"],
             "mode": config["mode"],
             "safetyLevel": load_safety(store)["level"],
+        },
+        "schedule": {
+            "activeDays": list(config.get("active_days") or []),
+            "startTime": config.get("start_time", "09:00"),
+            "endTime": config.get("end_time", "18:00"),
+            "maxPerDay": config.get("max_per_day", 3),
+            "intervalMinutes": config.get("interval_minutes", 180),
+            "botTime": datetime.now().isoformat(timespec="minutes"),
         },
         "accounts": accounts[:20],
         "leads": {
@@ -139,8 +149,9 @@ def build_snapshot(store: MarketplaceStore, config: dict[str, Any]) -> dict[str,
                     "scheduledAt": row["scheduled_at"],
                     "status": row["status"],
                     "approved": bool(row["approved"]),
+                    "detail": str(row.get("detail") or "")[:280],
                 }
-                for row in store.list_queue(statuses=["planned", "queued", "retry"], limit=35)
+                for row in store.list_queue(statuses=["planned", "queued", "retry", "running"], limit=35)
             ],
         },
         "alerts": [
@@ -166,7 +177,9 @@ def send_snapshot(
     *,
     open_request: Callable[..., Any] | None = None,
     control_enabled: bool = False,
+    accept_commands: bool = True,
     command_results: list[dict[str, str]] | None = None,
+    timeout: float = 5,
 ) -> list[dict[str, Any]] | None:
     if not KEY_PATTERN.fullmatch(key) or not INSTANCE_PATTERN.fullmatch(instance_key):
         raise SgiError("NOT_CONFIGURED", "Configura la llave y el identificador del monitor.")
@@ -175,11 +188,14 @@ def send_snapshot(
     body = {
         "instanceKey": instance_key,
         "instanceName": instance_name,
-        "botVersion": "monitor-control-1" if control_enabled else "monitor-1",
+        "botVersion": "monitor-control-2" if control_enabled else "monitor-2",
         "snapshot": snapshot,
     }
     if control_enabled:
-        body["commandProtocolVersion"] = 1
+        # Ocupado (publicando), el bot solo informa: no pide ordenes nuevas,
+        # pero entrega los resultados que tenga guardados.
+        if accept_commands:
+            body["commandProtocolVersion"] = 1
         body["commandResults"] = command_results or []
     request = urllib.request.Request(
         validate_base_url(base_url) + SYNC_PATH,
@@ -193,7 +209,7 @@ def send_snapshot(
     )
     opener = open_request or urllib.request.build_opener(NoRedirect()).open
     try:
-        with opener(request, timeout=5) as response:
+        with opener(request, timeout=timeout) as response:
             payload = json.loads(response.read(65536))
     except urllib.error.HTTPError as exc:
         raise SgiError(f"MONITOR_HTTP_{exc.code}", "El SGI rechazó el pulso.") from None
@@ -204,9 +220,9 @@ def send_snapshot(
     commands = payload["data"].get("pendingCommands")
     if not isinstance(commands, list) or len(commands) > 25 or any(not isinstance(item, dict) for item in commands):
         raise SgiError("MONITOR_RESPONSE", "El SGI devolvió una lista de órdenes inesperada.")
-    if not control_enabled and commands:
+    if not (control_enabled and accept_commands) and commands:
         raise SgiError("MONITOR_RESPONSE", "El monitor esperaba una respuesta sin órdenes.")
-    return commands if control_enabled else None
+    return commands if control_enabled and accept_commands else None
 
 
 def save_monitor_key(key: str) -> None:
@@ -216,7 +232,24 @@ def save_monitor_key(key: str) -> None:
     save_secret("sgi_monitor_key", MONITOR_SECRET_PATH, value, "Marketplace bot SGI monitor key")
 
 
-def send_configured_snapshot(store: MarketplaceStore, config: dict[str, Any]) -> bool:
+def pending_result_count(store: MarketplaceStore) -> int:
+    """Resultados de ordenes que el SGI todavia no confirmo."""
+    monitor = (load_settings().get("sgi") or {}).get("monitor") or {}
+    instance_key = str(monitor.get("instance_key") or "").strip() if isinstance(monitor, dict) else ""
+    if not isinstance(monitor, dict) or monitor.get("control_enabled") is not True or not INSTANCE_PATTERN.fullmatch(instance_key):
+        return 0
+    from sgi_command_journal import CommandJournal
+
+    return len(CommandJournal(store, instance_key).pending_results())
+
+
+def send_configured_snapshot(
+    store: MarketplaceStore,
+    config: dict[str, Any],
+    *,
+    accept_commands: bool = True,
+    timeout: float = 5,
+) -> bool:
     settings = load_settings().get("sgi") or {}
     monitor = settings.get("monitor") or {}
     if not isinstance(monitor, dict) or monitor.get("enabled") is not True:
@@ -241,7 +274,9 @@ def send_configured_snapshot(store: MarketplaceStore, config: dict[str, Any]) ->
         str(monitor.get("instance_name") or instance_key).strip(),
         build_snapshot(store, config),
         control_enabled=control_enabled,
+        accept_commands=accept_commands,
         command_results=results,
+        timeout=timeout,
     )
     if journal is not None:
         from sgi_commands import execute_command
