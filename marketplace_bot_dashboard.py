@@ -91,7 +91,7 @@ SGI_DRIVE_TOKEN_PATH = SCRATCH_DIR / "token_google_drive.json"
 SGI_REPORT_PATH = SCRATCH_DIR / "sgi_sync_report.json"
 _drive_authorization_lock = threading.Lock()
 _drive_authorization: dict[str, Any] = {"error": "", "running": False, "url": ""}
-DRIVE_AUTHORIZATION_TIMEOUT_SECONDS = 300
+DRIVE_AUTHORIZATION_TIMEOUT_SECONDS = 900  # 15 min para elegir la cuenta y aceptar
 
 
 def json_load(path: Path, fallback: Any) -> Any:

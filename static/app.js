@@ -598,12 +598,26 @@
     }
 
     async function authorizeDrive() {
-      const result = await api("/api/sgi/drive/authorize", { method: "POST", body: "{}" });
-      const opened = window.open(result.url, "_blank", "noopener");
+      // La pestaña se abre en el mismo clic: si se abre después de esperar al
+      // servidor, el navegador la toma como ventana emergente y la bloquea.
+      const tab = window.open("", "_blank");
+      let result;
+      try {
+        result = await api("/api/sgi/drive/authorize", { method: "POST", body: "{}" });
+      } catch (error) {
+        if (tab) tab.close();
+        throw error;
+      }
+      let opened = false;
+      if (tab) {
+        tab.opener = null;
+        tab.location.href = result.url;
+        opened = true;
+      }
       // Si el navegador bloquea la ventana, queda un enlace para abrirla a mano.
       $("sgiLists").insertAdjacentHTML(
         "afterbegin",
-        `<p class="muted">Autoriza Google Drive en la pestaña de Google y luego pulsa Actualizar. <a href="${escapeHtml(result.url)}" target="_blank" rel="noopener">Abrir la autorización de Google</a></p>`,
+        `<p class="muted">Autoriza Google Drive en la pestaña de Google (el enlace vale 15 minutos) y luego pulsa Actualizar. <a href="${escapeHtml(result.url)}" target="_blank" rel="noopener">Abrir la autorización de Google</a></p>`,
       );
       toast(opened ? "Se abrió Google para autorizar Drive en solo lectura." : "Pulsa el enlace para autorizar Google Drive.");
     }
